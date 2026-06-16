@@ -1180,6 +1180,17 @@ mod tests {
     }
 
     #[test]
+    fn async_api_swaps_legacy_v4_realtime_default() {
+        // Backwards-compat: a config left on the old realtime default
+        // (`stt-rt-v4`) still routes to the current async default under async_api.
+        let mut cfg = cfg_with_key(Some("k"));
+        cfg.async_api = true;
+        cfg.model = "stt-rt-v4".into();
+        let t = SonioxTranscriber::new(cfg).unwrap();
+        assert_eq!(t.config.model, "stt-async-v5");
+    }
+
+    #[test]
     fn async_api_keeps_explicit_model_override() {
         let mut cfg = cfg_with_key(Some("k"));
         cfg.async_api = true;

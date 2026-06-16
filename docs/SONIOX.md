@@ -124,7 +124,7 @@ Concretely: if your config has the default `async_api = false`, dictation keeps 
 
 If your config has `async_api = true` (explicit), both paths use async — your call.
 
-You can see the meeting-mode switch in the daemon log: `Soniox meeting mode: routing to async API (stt-async-v5); dictation path unchanged`.
+You can see the meeting-mode switch in the daemon log: `Soniox meeting mode: routing to async API; dictation path unchanged`.
 
 ## Language Hints
 
