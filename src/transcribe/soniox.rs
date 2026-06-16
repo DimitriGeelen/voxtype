@@ -153,9 +153,9 @@ impl SonioxTranscriber {
             })?;
 
         // User left the default realtime model with async_api enabled —
-        // swap to the async-default model.
-        if config.async_api && config.model == "stt-rt-v4" {
-            config.model = "stt-async-v4".to_string();
+        // swap to the current async-default model.
+        if config.async_api && matches!(config.model.as_str(), "stt-rt-v4" | "stt-rt-v5") {
+            config.model = "stt-async-v5".to_string();
         }
 
         let context_terms = load_context_terms(&config)?;
@@ -1157,7 +1157,7 @@ mod tests {
     fn cfg_with_key(key: Option<&str>) -> SonioxConfig {
         SonioxConfig {
             api_key: key.map(|s| s.to_string()),
-            model: "stt-rt-v4".into(),
+            model: "stt-rt-v5".into(),
             language_hints: vec!["hu".into(), "en".into()],
             language_hints_strict: true,
             streaming: true,
@@ -1176,7 +1176,7 @@ mod tests {
         cfg.async_api = true;
         let t = SonioxTranscriber::new(cfg).unwrap();
         assert!(t.as_streaming().is_none());
-        assert_eq!(t.config.model, "stt-async-v4");
+        assert_eq!(t.config.model, "stt-async-v5");
     }
 
     #[test]
@@ -1221,7 +1221,7 @@ mod tests {
         let t = SonioxTranscriber::new(cfg_with_key(Some("my-key"))).unwrap();
         let frame: serde_json::Value = serde_json::from_str(&t.init_frame()).unwrap();
         assert_eq!(frame["api_key"], "my-key");
-        assert_eq!(frame["model"], "stt-rt-v4");
+        assert_eq!(frame["model"], "stt-rt-v5");
         assert_eq!(frame["audio_format"], "pcm_s16le");
         assert_eq!(frame["sample_rate"], 16000);
         assert_eq!(frame["num_channels"], 1);
