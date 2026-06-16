@@ -147,7 +147,7 @@ impl DotoolOutput {
         Some(path)
     }
 
-    /// Warn if user has XKB override configured while dotoold is running.
+    /// Emit a visible configuration error when XKB overrides force the slow direct-dotool path.
     fn maybe_warn_slow_path(xkb_layout: Option<&str>, xkb_variant: Option<&str>) {
         if (xkb_layout.is_some() || xkb_variant.is_some()) && Self::daemon_pipe_path().is_some() {
             let _ = SLOW_PATH_WARNING_EMITTED.get_or_init(|| {
@@ -456,8 +456,10 @@ mod tests {
         let _guard = DotoolPipeEnvGuard::set("/nonexistent/dotool-pipe-test");
         assert!(DotoolOutput::daemon_pipe_path().is_none());
     }
+
     #[test]
     fn maybe_warn_slow_path_does_not_panic() {
+        let _guard = DotoolPipeEnvGuard::set("/nonexistent/dotool-pipe-test");
         DotoolOutput::maybe_warn_slow_path(None, None);
         DotoolOutput::maybe_warn_slow_path(Some("us"), None);
     }
