@@ -804,7 +804,8 @@ impl SonioxTranscriber {
         let poll_start = std::time::Instant::now();
         loop {
             if poll_start.elapsed() > max_wait {
-                self.async_cleanup(client, &auth, &job_id).await;
+                self.async_cleanup(client, &auth, &job_id, Some(&file_id))
+                    .await;
                 return Err(TranscribeError::InferenceFailed(format!(
                     "Soniox async: job {} did not complete within {}s",
                     job_id,
@@ -823,7 +824,8 @@ impl SonioxTranscriber {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                self.async_cleanup(client, &auth, &job_id).await;
+                self.async_cleanup(client, &auth, &job_id, Some(&file_id))
+                    .await;
                 return Err(TranscribeError::InferenceFailed(format!(
                     "Soniox async: poll returned {}: {}",
                     status, text
@@ -841,7 +843,8 @@ impl SonioxTranscriber {
                     let err = status_resp
                         .error_message
                         .unwrap_or_else(|| "unspecified error".to_string());
-                    self.async_cleanup(client, &auth, &job_id).await;
+                    self.async_cleanup(client, &auth, &job_id, Some(&file_id))
+                        .await;
                     return Err(TranscribeError::InferenceFailed(format!(
                         "Soniox async: server error: {}",
                         err
@@ -878,7 +881,8 @@ impl SonioxTranscriber {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            self.async_cleanup(client, &auth, &job_id).await;
+            self.async_cleanup(client, &auth, &job_id, Some(&file_id))
+                .await;
             return Err(TranscribeError::InferenceFailed(format!(
                 "Soniox async: fetch transcript returned {}: {}",
                 status, text
@@ -896,7 +900,8 @@ impl SonioxTranscriber {
         })?;
 
         // 5. Cleanup server-side state (best effort, don't fail user-visible).
-        self.async_cleanup(client, &auth, &job_id).await;
+        self.async_cleanup(client, &auth, &job_id, Some(&file_id))
+            .await;
 
         // 6. Concatenate tokens (skip special markers).
         let mut out = String::new();
@@ -910,21 +915,67 @@ impl SonioxTranscriber {
     }
 
     async fn async_delete_file(&self, client: &reqwest::Client, auth: &str, file_id: &str) {
-        let _ = client
-            .delete(format!("{}/files/{}", SONIOX_ASYNC_BASE, file_id))
-            .header("Authorization", auth)
-            .send()
-            .await;
+        self.async_delete_with_retry(
+            client,
+            auth,
+            format!("{}/files/{}", SONIOX_ASYNC_BASE, file_id),
+        )
+        .await;
     }
 
-    async fn async_cleanup(&self, client: &reqwest::Client, auth: &str, job_id: &str) {
-        // DELETE /v1/transcriptions/{id} cascades to its associated file
-        // per Soniox docs, so we don't issue a separate /files/{id} DELETE.
-        let _ = client
-            .delete(format!("{}/transcriptions/{}", SONIOX_ASYNC_BASE, job_id))
-            .header("Authorization", auth)
-            .send()
-            .await;
+    async fn async_cleanup(
+        &self,
+        client: &reqwest::Client,
+        auth: &str,
+        job_id: &str,
+        file_id: Option<&str>,
+    ) {
+        // Delete the transcription first, then its uploaded file. DELETE
+        // /v1/transcriptions/{id} does NOT cascade to the file (confirmed
+        // empirically and by Soniox's own async example, which deletes both):
+        // leaving the file behind leaks it against the org-wide 1000-file cap,
+        // after which every /v1/files upload 429s and transcription silently
+        // stops. Both deletes are capped at 500 req/min, so retry on 429.
+        self.async_delete_with_retry(
+            client,
+            auth,
+            format!("{}/transcriptions/{}", SONIOX_ASYNC_BASE, job_id),
+        )
+        .await;
+        if let Some(file_id) = file_id {
+            self.async_delete_file(client, auth, file_id).await;
+        }
+    }
+
+    /// Best-effort DELETE that retries on 429 (the cleanup endpoints are rate
+    /// limited). Never fails the user-visible result; logs if it gives up so a
+    /// persistent leak is visible rather than silent.
+    async fn async_delete_with_retry(&self, client: &reqwest::Client, auth: &str, url: String) {
+        for attempt in 0..4u32 {
+            match client
+                .delete(&url)
+                .header("Authorization", auth)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => return,
+                Ok(resp) if resp.status().as_u16() == 429 => {
+                    tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt + 1))).await;
+                }
+                Ok(resp) => {
+                    tracing::warn!("Soniox cleanup DELETE {} returned {}", url, resp.status());
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!("Soniox cleanup DELETE {} failed: {}", url, e);
+                    return;
+                }
+            }
+        }
+        tracing::error!(
+            "Soniox cleanup DELETE {} still rate-limited after retries; resource may leak against org quota",
+            url
+        );
     }
 }
 
