@@ -970,20 +970,25 @@ impl SonioxTranscriber {
                 .send()
                 .await
             {
-                Ok(resp) if resp.status().is_success() => return,
-                // 429/5xx are transient; other 4xx (e.g. 404 already-gone) won't
-                // change on retry, so stop.
-                Ok(resp) if resp.status().as_u16() == 429 || resp.status().is_server_error() => {
-                    tracing::debug!(
-                        "Soniox cleanup DELETE {} got {}, retrying",
-                        url,
-                        resp.status()
-                    );
-                    true
-                }
                 Ok(resp) => {
-                    tracing::warn!("Soniox cleanup DELETE {} returned {}", url, resp.status());
-                    return;
+                    let status = resp.status();
+                    // Drain the body before branching: reqwest won't return a
+                    // connection to the pool while its response body is unread,
+                    // so dropping it here would force a fresh connection on every
+                    // retry and amplify churn during a 429/5xx storm.
+                    let _ = resp.bytes().await;
+                    if status.is_success() {
+                        return;
+                    }
+                    // 429/5xx are transient; other 4xx (e.g. 404 already-gone)
+                    // won't change on retry, so stop.
+                    if status.as_u16() == 429 || status.is_server_error() {
+                        tracing::debug!("Soniox cleanup DELETE {} got {}, retrying", url, status);
+                        true
+                    } else {
+                        tracing::warn!("Soniox cleanup DELETE {} returned {}", url, status);
+                        return;
+                    }
                 }
                 Err(e) => {
                     tracing::debug!("Soniox cleanup DELETE {} failed: {}, retrying", url, e);
@@ -996,7 +1001,7 @@ impl SonioxTranscriber {
             }
         }
         tracing::error!(
-            "Soniox cleanup DELETE {} still rate-limited after retries; resource may leak against org quota",
+            "Soniox cleanup DELETE {} still failing after retries; resource may leak against org quota",
             url
         );
     }
