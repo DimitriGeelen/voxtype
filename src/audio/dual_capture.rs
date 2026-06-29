@@ -244,7 +244,15 @@ impl DualCapture {
             .args(["get-default-sink"])
             .output()
             .ok()?;
-        let sink = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !output.status.success() {
+            return None;
+        }
+        let sink = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if sink.is_empty() {
             return None;
         }
