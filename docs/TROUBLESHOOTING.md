@@ -394,6 +394,11 @@ If you experience phrase repetition (e.g., "word word word"), make sure this set
 
 **Cause:** Known Whisper behavior with silence or noise.
 
+Whisper may also occasionally return a punctuation-only transcript, such as a
+lone dash (`-`), even when the recording contains speech. Voxtype treats this
+as a degenerate decode: it retries the same audio once with a more conservative
+decode path, then drops the result if the retry is still punctuation-only.
+
 **Solutions:**
 1. Use a larger model for better accuracy
 2. Avoid recording ambient noise
