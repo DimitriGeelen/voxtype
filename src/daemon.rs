@@ -660,6 +660,8 @@ pub struct Daemon {
     speech_enhancer: Option<std::sync::Arc<audio::enhance::GtcrnEnhancer>>,
     // Media players that were paused when recording started (for resume on stop)
     paused_media_players: Vec<String>,
+    // Audio streams that were ducked when recording started (for restore on recording stop)
+    ducked_media_streams: Vec<audio::media::DuckedMediaStream>,
 }
 
 impl Daemon {
@@ -763,6 +765,7 @@ impl Daemon {
             #[cfg(feature = "onnx-common")]
             speech_enhancer: None,
             paused_media_players: Vec::new(),
+            ducked_media_streams: Vec::new(),
         }
     }
 
@@ -779,6 +782,22 @@ impl Daemon {
             self.paused_media_players =
                 audio::media::pause_playing_players(&self.config.audio.pause_media_ignored_players)
                     .await;
+        }
+    }
+
+    /// Duck active audio streams if configured, storing original volumes
+    async fn duck_media_streams(&mut self) {
+        if self.config.audio.duck_media {
+            self.ducked_media_streams =
+                audio::media::duck_playing_audio(self.config.audio.duck_media_volume_percent).await;
+        }
+    }
+
+    /// Restore any audio streams that were ducked at recording start
+    fn restore_ducked_media_streams(&mut self) {
+        if !self.ducked_media_streams.is_empty() {
+            let streams = std::mem::take(&mut self.ducked_media_streams);
+            tokio::spawn(audio::media::restore_ducked_audio(streams));
         }
     }
 
@@ -904,6 +923,7 @@ impl Daemon {
         self.update_state("streaming");
         self.play_feedback(SoundEvent::RecordingStart);
         self.pause_media_players().await;
+        self.duck_media_streams().await;
 
         if let Some(cmd) = &self.config.output.pre_recording_command {
             if let Err(e) = output::run_hook(cmd, "pre_recording").await {
@@ -971,6 +991,7 @@ impl Daemon {
         self.start_streaming_drain_pump();
         if let Some(mut c) = audio_capture.take() {
             let _ = c.stop().await;
+            self.restore_ducked_media_streams();
         }
     }
 
@@ -984,6 +1005,7 @@ impl Daemon {
     ) {
         if let Some(mut c) = audio_capture.take() {
             let _ = c.stop().await;
+            self.restore_ducked_media_streams();
         }
         if let Some(h) = streaming_handle.take() {
             // Don't error on join failure; the task may have already
@@ -1026,6 +1048,7 @@ impl Daemon {
         }
         if let Some(mut c) = audio_capture.take() {
             let _ = c.stop().await;
+            self.restore_ducked_media_streams();
         }
         if let Some(s) = streaming_session.as_mut() {
             if let Err(e) = s.rewind().await {
@@ -1042,6 +1065,7 @@ impl Daemon {
         cleanup_bool_override("auto_submit");
         cleanup_bool_override("shift_enter");
         cleanup_bool_override("smart_auto_submit");
+        self.restore_ducked_media_streams();
         self.resume_media_players();
         *state = State::Idle;
         self.update_state("idle");
@@ -1850,7 +1874,9 @@ impl Daemon {
 
         // Stop recording and get samples
         if let Some(mut capture) = audio_capture.take() {
-            match capture.stop().await {
+            let stop_result = capture.stop().await;
+            self.restore_ducked_media_streams();
+            match stop_result {
                 Ok(samples) => {
                     let audio_duration = samples.len() as f32 / 16000.0;
 
@@ -2753,6 +2779,7 @@ impl Daemon {
                                             self.update_state("recording");
                                             self.play_feedback(SoundEvent::RecordingStart);
                                             self.pause_media_players().await;
+                                            self.duck_media_streams().await;
 
                                             // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                             if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -2788,6 +2815,10 @@ impl Daemon {
                                 ).await {
                                     Ok(t) => Some(t),
                                     Err(()) => {
+                                        if let Some(mut capture) = audio_capture.take() {
+                                            let _ = capture.stop().await;
+                                            self.restore_ducked_media_streams();
+                                        }
                                         state = State::Idle;
                                         self.update_state("idle");
                                         continue;
@@ -2824,6 +2855,7 @@ impl Daemon {
                                         }
                                     }
                                 }
+                                self.restore_ducked_media_streams();
 
                                 let transcriber = match self.get_transcriber_for_recording(
                                     model_override.as_deref(),
@@ -2965,6 +2997,7 @@ impl Daemon {
                                             self.update_state("recording");
                                             self.play_feedback(SoundEvent::RecordingStart);
                                             self.pause_media_players().await;
+                                            self.duck_media_streams().await;
 
                                             // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                             if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -2989,6 +3022,10 @@ impl Daemon {
                                 ).await {
                                     Ok(t) => Some(t),
                                     Err(()) => {
+                                        if let Some(mut capture) = audio_capture.take() {
+                                            let _ = capture.stop().await;
+                                            self.restore_ducked_media_streams();
+                                        }
                                         state = State::Idle;
                                         self.update_state("idle");
                                         continue;
@@ -3025,6 +3062,7 @@ impl Daemon {
                                         }
                                     }
                                 }
+                                self.restore_ducked_media_streams();
 
                                 let transcriber = match self.get_transcriber_for_recording(
                                     model_override.as_deref(),
@@ -3077,6 +3115,7 @@ impl Daemon {
                                 if let Some(mut capture) = audio_capture.take() {
                                     let _ = capture.stop().await;
                                 }
+                                self.restore_ducked_media_streams();
 
                                 // Cancel any pending model load task
                                 if let Some(task) = self.model_load_task.take() {
@@ -3152,6 +3191,7 @@ impl Daemon {
                         if let Some(mut capture) = audio_capture.take() {
                             let _ = capture.stop().await;
                         }
+                        self.restore_ducked_media_streams();
 
                         // Cancel any pending model load task
                         if let Some(task) = self.model_load_task.take() {
@@ -3297,6 +3337,10 @@ impl Daemon {
                         ).await {
                             Ok(t) => Some(t),
                             Err(()) => {
+                                if let Some(mut capture) = audio_capture.take() {
+                                    let _ = capture.stop().await;
+                                    self.restore_ducked_media_streams();
+                                }
                                 state = State::Idle;
                                 self.update_state("idle");
                                 continue;
@@ -3311,6 +3355,7 @@ impl Daemon {
                                     }
                                 }
                             }
+                            self.restore_ducked_media_streams();
 
                             if let Some(transcriber) = transcriber {
                                 self.update_state("transcribing");
@@ -3442,9 +3487,10 @@ impl Daemon {
                                             model_override,
                                         };
                                     }
-                                    self.update_state("recording");
-                                    self.play_feedback(SoundEvent::RecordingStart);
-                                    self.pause_media_players().await;
+                                            self.update_state("recording");
+                                            self.play_feedback(SoundEvent::RecordingStart);
+                                            self.pause_media_players().await;
+                                            self.duck_media_streams().await;
 
                                     // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                     if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -3482,6 +3528,10 @@ impl Daemon {
                         ).await {
                             Ok(t) => Some(t),
                             Err(()) => {
+                                if let Some(mut capture) = audio_capture.take() {
+                                    let _ = capture.stop().await;
+                                    self.restore_ducked_media_streams();
+                                }
                                 state = State::Idle;
                                 self.update_state("idle");
                                 continue;
@@ -3517,6 +3567,7 @@ impl Daemon {
                                 }
                             }
                         }
+                        self.restore_ducked_media_streams();
 
                         let transcriber = match self.get_transcriber_for_recording(
                             model_override.as_deref(),

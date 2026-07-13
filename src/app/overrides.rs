@@ -185,6 +185,12 @@ pub(crate) fn apply_cli_overrides(config: &mut config::Config, cli: &Cli) -> Opt
     if cli.pause_media {
         config.audio.pause_media = true;
     }
+    if cli.duck_media {
+        config.audio.duck_media = true;
+    }
+    if let Some(volume) = cli.duck_media_volume {
+        config.audio.duck_media_volume_percent = volume.min(150);
+    }
 
     // Output overrides
     if let Some(ref append_text) = cli.append_text {

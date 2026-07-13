@@ -363,6 +363,47 @@ Maximum recording duration in seconds. Recording automatically stops after this 
 max_duration_secs = 120  # Allow 2-minute recordings
 ```
 
+### pause_media
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+When `true`, pauses currently playing MPRIS media players when recording starts and resumes only those players after output completes.
+
+```toml
+[audio]
+pause_media = true
+```
+
+### duck_media
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+When `true`, lowers active media stream volume when recording starts and restores the original volume as soon as recording stops, before transcription or output processing.
+
+Use this as an alternative to `pause_media` when you want music or video to keep playing quietly during push-to-talk.
+
+```toml
+[audio]
+duck_media = true
+duck_media_volume_percent = 70
+```
+
+### duck_media_volume_percent
+
+**Type:** Integer
+**Default:** `70`
+**Required:** No
+
+Relative volume percentage for streams affected by `duck_media`. The value is
+applied to each stream's current per-channel volume, not to a fixed 100% base:
+`70` keeps media at 70% of its current volume, `50` keeps it at half, and the
+original per-channel volumes are restored when recording stops. Values above
+`150` are clamped by the CLI override.
+
 ---
 
 ## [audio.feedback]
@@ -3202,6 +3243,9 @@ Any config file setting can be overridden via environment variable. These are ap
 |----------|------|-------------------|
 | `VOXTYPE_AUDIO_DEVICE` | string | `audio.device` |
 | `VOXTYPE_MAX_DURATION_SECS` | integer | `audio.max_duration_secs` |
+| `VOXTYPE_PAUSE_MEDIA` | bool | `audio.pause_media` |
+| `VOXTYPE_DUCK_MEDIA` | bool | `audio.duck_media` |
+| `VOXTYPE_DUCK_MEDIA_VOLUME_PERCENT` | integer | `audio.duck_media_volume_percent` |
 | `VOXTYPE_AUDIO_FEEDBACK` | bool | `audio.feedback.enabled` |
 
 **Output:**
