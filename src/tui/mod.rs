@@ -53,6 +53,13 @@ use section::Section;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// Entry point for the hidden `voxtype configure --probe-audio-devices`
+/// flag: print detected input devices and exit. See
+/// `audio::start_device_scan` for why this runs in its own process.
+pub fn probe_audio_devices() {
+    audio::print_input_devices();
+}
+
 /// Launch the TUI.
 ///
 /// `config_path` is the `-c/--config` value; when set, every section reads and
@@ -101,6 +108,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<bo
     let general_refresh_interval = Duration::from_secs(2);
 
     loop {
+        app.poll_background();
         terminal.draw(|f| draw(f, &app))?;
 
         if !event::poll(Duration::from_millis(250))? {
