@@ -463,6 +463,38 @@ else
     cp "${SCRIPT_DIR}/voxtype-wrapper.sh" "$STAGING/usr/bin/voxtype"
     chmod 755 "$STAGING/usr/bin/voxtype"
 fi
+# OSD frontends and the audio-bridge sidecar. Dockerfile.onnx builds these
+# four alongside the onnx-avx2 binary and they ship as their own release
+# assets, but until v0.7.6 the deb/rpm never installed them, so
+# `voxtype setup quickshell` could not find the bridge and the OSD stayed
+# empty for package users (#488). Layout mirrors the voxtype-bin AUR
+# package, which had it right.
+#
+# The voxtype-osd launcher probes its own parent directory, so it finds
+# voxtype-osd-gtk4 and voxtype-osd-quickshell in /usr/lib/voxtype without
+# them being on PATH. Only the launcher gets a /usr/bin symlink.
+install_companion_binary() {
+    local asset="$1"        # release-asset suffix, e.g. osd-gtk4
+    local dest="$2"         # absolute path under $STAGING
+    local src="${RELEASE_DIR}/voxtype-${VERSION}-linux-${TARGET_ARCH}-${asset}"
+    if [[ ! -f "$src" ]]; then
+        echo "  warning: ${src##*/} not found, skipping" >&2
+        return 0
+    fi
+    install -Dm755 "$src" "$dest"
+}
+install_companion_binary osd "$STAGING/usr/lib/voxtype/voxtype-osd"
+install_companion_binary osd-gtk4 "$STAGING/usr/lib/voxtype/voxtype-osd-gtk4"
+install_companion_binary osd-quickshell "$STAGING/usr/lib/voxtype/voxtype-osd-quickshell"
+if [[ -f "$STAGING/usr/lib/voxtype/voxtype-osd" ]]; then
+    ln -sf /usr/lib/voxtype/voxtype-osd "$STAGING/usr/bin/voxtype-osd"
+fi
+
+# voxtype-audio-bridge: NDJSON sidecar that streams audio levels over a
+# UNIX socket to the Quickshell OSD. Lives in /usr/bin because the
+# quickshell launcher exec's it directly by basename.
+install_companion_binary audio-bridge "$STAGING/usr/bin/voxtype-audio-bridge"
+
 cp config/default.toml "$STAGING/etc/voxtype/config.toml"
 cp packaging/systemd/voxtype.service "$STAGING/usr/lib/systemd/user/"
 cp README.md "$STAGING/usr/share/doc/voxtype/"
