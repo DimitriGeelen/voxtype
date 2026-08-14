@@ -1,8 +1,9 @@
 //! MPRIS media player control via direct D-Bus.
 //!
-//! Pauses playing players when recording starts and resumes only the
-//! players we actually paused. The previous implementation shelled out
-//! to `playerctl`, which had two failure modes that hit real users:
+//! Pauses playing players before recording starts and resumes only the
+//! players we actually paused as soon as capture stops. The previous
+//! implementation shelled out to `playerctl`, which had two failure modes
+//! that hit real users:
 //!
 //!   * `playerctl -l` silently filters out some MPRIS-compliant players
 //!     (e.g. `cliamp`) even when they expose a complete MPRIS interface

@@ -809,6 +809,21 @@ impl Daemon {
         }
     }
 
+    /// Suppress media before opening the microphone so playback cannot leak
+    /// into the beginning of a recording.
+    async fn suppress_recording_media(&mut self) {
+        self.pause_media_players().await;
+        self.duck_media_streams().await;
+    }
+
+    /// Restore media as soon as microphone capture has stopped. Transcription
+    /// and text output may continue after this point without keeping playback
+    /// paused or ducked.
+    fn restore_recording_media(&mut self) {
+        self.restore_ducked_media_streams();
+        self.resume_media_players();
+    }
+
     /// Update the state file if configured
     fn update_state(&self, state_name: &str) {
         if let Some(ref path) = self.state_file_path {
@@ -922,8 +937,6 @@ impl Daemon {
         };
         self.update_state("streaming");
         self.play_feedback(SoundEvent::RecordingStart);
-        self.pause_media_players().await;
-        self.duck_media_streams().await;
 
         if let Some(cmd) = &self.config.output.pre_recording_command {
             if let Err(e) = output::run_hook(cmd, "pre_recording").await {
@@ -991,8 +1004,8 @@ impl Daemon {
         self.start_streaming_drain_pump();
         if let Some(mut c) = audio_capture.take() {
             let _ = c.stop().await;
-            self.restore_ducked_media_streams();
         }
+        self.restore_recording_media();
     }
 
     async fn end_streaming(
@@ -1005,8 +1018,8 @@ impl Daemon {
     ) {
         if let Some(mut c) = audio_capture.take() {
             let _ = c.stop().await;
-            self.restore_ducked_media_streams();
         }
+        self.restore_recording_media();
         if let Some(h) = streaming_handle.take() {
             // Don't error on join failure; the task may have already
             // completed. We drop events implicitly here.
@@ -1024,7 +1037,6 @@ impl Daemon {
             }
         }
 
-        self.resume_media_players();
         *state = State::Idle;
         self.update_state("idle");
     }
@@ -1042,13 +1054,17 @@ impl Daemon {
         streaming_chain: &mut Option<Vec<Box<dyn TextOutput>>>,
         notification_body: &str,
     ) {
-        if let Some(h) = streaming_handle.take() {
+        let backend_task = streaming_handle.take().map(|h| {
             let _ = h.cancel.send(());
-            let _ = h.task.await;
-        }
+            h.task
+        });
+        self.cut_streaming_audio();
         if let Some(mut c) = audio_capture.take() {
             let _ = c.stop().await;
-            self.restore_ducked_media_streams();
+        }
+        self.restore_recording_media();
+        if let Some(task) = backend_task {
+            let _ = task.await;
         }
         if let Some(s) = streaming_session.as_mut() {
             if let Err(e) = s.rewind().await {
@@ -1065,8 +1081,6 @@ impl Daemon {
         cleanup_bool_override("auto_submit");
         cleanup_bool_override("shift_enter");
         cleanup_bool_override("smart_auto_submit");
-        self.restore_ducked_media_streams();
-        self.resume_media_players();
         *state = State::Idle;
         self.update_state("idle");
         self.play_feedback(SoundEvent::Cancelled);
@@ -1631,7 +1645,7 @@ impl Daemon {
         cleanup_bool_override("auto_submit");
         cleanup_bool_override("shift_enter");
         cleanup_bool_override("smart_auto_submit");
-        self.resume_media_players();
+        self.restore_recording_media();
         *state = State::Idle;
         self.update_state("idle");
 
@@ -1849,33 +1863,34 @@ impl Daemon {
         &mut self,
         state: &mut State,
         audio_capture: &mut Option<Box<dyn AudioCapture>>,
-        transcriber: Option<Arc<dyn Transcriber>>,
+        model_override: Option<String>,
+        transcriber_preloaded: &Option<Arc<dyn Transcriber>>,
     ) -> bool {
         let duration = state.recording_duration().unwrap_or_default();
         tracing::info!("Recording stopped ({:.1}s)", duration.as_secs_f32());
 
-        // Play audio feedback
-        self.play_feedback(SoundEvent::RecordingStop);
-
-        // Send notification if enabled
-        if self.config.output.notification.on_recording_stop {
-            send_notification(
-                "Recording Stopped",
-                "Transcribing...",
-                self.config.output.notification.show_engine_icon,
-                self.config.engine,
-                &self.config.output.notification.urgency,
-            )
-            .await;
-        }
-
         // Tear down the OSD audio-frame emitter for this session.
         self.stop_level_emitter();
 
-        // Stop recording and get samples
+        // Stop recording before waiting on model loading or doing any
+        // transcription work, then restore media immediately.
         if let Some(mut capture) = audio_capture.take() {
             let stop_result = capture.stop().await;
-            self.restore_ducked_media_streams();
+            self.restore_recording_media();
+
+            self.play_feedback(SoundEvent::RecordingStop);
+
+            if self.config.output.notification.on_recording_stop {
+                send_notification(
+                    "Recording Stopped",
+                    "Transcribing...",
+                    self.config.output.notification.show_engine_icon,
+                    self.config.engine,
+                    &self.config.output.notification.urgency,
+                )
+                .await;
+            }
+
             match stop_result {
                 Ok(samples) => {
                     let audio_duration = samples.len() as f32 / 16000.0;
@@ -1920,22 +1935,30 @@ impl Daemon {
                     };
                     self.update_state("transcribing");
 
+                    let transcriber = match self
+                        .get_transcriber_for_recording(
+                            model_override.as_deref(),
+                            transcriber_preloaded,
+                        )
+                        .await
+                    {
+                        Ok(transcriber) => transcriber,
+                        Err(()) => {
+                            self.reset_to_idle(state).await;
+                            return false;
+                        }
+                    };
+
                     // Spawn transcription task (non-blocking)
-                    if let Some(t) = transcriber {
-                        // Hold an Arc clone so the result handler can query
-                        // post-transcription metadata (e.g. detected language
-                        // for layout hints, issue #180) without re-fetching
-                        // the transcriber.
-                        self.active_transcriber = Some(t.clone());
-                        self.transcription_task =
-                            Some(tokio::task::spawn_blocking(move || t.transcribe(&samples)));
-                        true
-                    } else {
-                        tracing::error!("No transcriber available");
-                        self.play_feedback(SoundEvent::Error);
-                        self.reset_to_idle(state).await;
-                        false
-                    }
+                    // Hold an Arc clone so the result handler can query
+                    // post-transcription metadata (e.g. detected language
+                    // for layout hints, issue #180) without re-fetching
+                    // the transcriber.
+                    self.active_transcriber = Some(transcriber.clone());
+                    self.transcription_task = Some(tokio::task::spawn_blocking(move || {
+                        transcriber.transcribe(&samples)
+                    }));
+                    true
                 }
                 Err(e) => {
                     tracing::warn!("Recording error: {}", e);
@@ -1944,6 +1967,7 @@ impl Daemon {
                 }
             }
         } else {
+            self.restore_recording_media();
             self.reset_to_idle(state).await;
             false
         }
@@ -2145,7 +2169,6 @@ impl Daemon {
                             }
                         }
 
-                        self.resume_media_players();
                         *state = State::Idle;
                         self.update_state("idle");
                         return;
@@ -2278,7 +2301,6 @@ impl Daemon {
                         }
                     }
 
-                    self.resume_media_players();
                     *state = State::Idle;
                     self.update_state("idle");
                 }
@@ -2739,6 +2761,10 @@ impl Daemon {
                                     }
                                 }
 
+                                // Pause or duck playback before either capture path opens
+                                // the microphone.
+                                self.suppress_recording_media().await;
+
                                 // Try streaming first; fall through to batch if the engine
                                 // doesn't support streaming or setup fails.
                                 if self.try_start_streaming(
@@ -2778,8 +2804,6 @@ impl Daemon {
                                             }
                                             self.update_state("recording");
                                             self.play_feedback(SoundEvent::RecordingStart);
-                                            self.pause_media_players().await;
-                                            self.duck_media_streams().await;
 
                                             // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                             if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -2790,6 +2814,7 @@ impl Daemon {
                                         }
                                         Err(()) => {
                                             // Helper already logged and played the error sound.
+                                            self.restore_recording_media();
                                             cleanup_profile_override();
                                         }
                                     }
@@ -2809,26 +2834,13 @@ impl Daemon {
                                 streaming_session = None;
                                 streaming_chain = None;
                             } else if let State::Recording { model_override, .. } = &state {
-                                let transcriber = match self.get_transcriber_for_recording(
-                                    model_override.as_deref(),
-                                    &transcriber_preloaded,
-                                ).await {
-                                    Ok(t) => Some(t),
-                                    Err(()) => {
-                                        if let Some(mut capture) = audio_capture.take() {
-                                            let _ = capture.stop().await;
-                                            self.restore_ducked_media_streams();
-                                        }
-                                        state = State::Idle;
-                                        self.update_state("idle");
-                                        continue;
-                                    }
-                                };
+                                let model_override = model_override.clone();
 
                                 self.start_transcription_task(
                                     &mut state,
                                     &mut audio_capture,
-                                    transcriber,
+                                    model_override,
+                                    &transcriber_preloaded,
                                 ).await;
                             } else if state.is_eager_recording() {
                                 // Handle eager recording stop - extract model_override first
@@ -2840,12 +2852,6 @@ impl Daemon {
                                 let duration = state.recording_duration().unwrap_or_default();
                                 tracing::info!("Eager recording stopped ({:.1}s)", duration.as_secs_f32());
 
-                                self.play_feedback(SoundEvent::RecordingStop);
-
-                                if self.config.output.notification.on_recording_stop {
-                                    send_notification("Recording Stopped", "Transcribing...", self.config.output.notification.show_engine_icon, self.config.engine, &self.config.output.notification.urgency).await;
-                                }
-
                                 // Stop audio capture and get remaining samples
                                 if let Some(mut capture) = audio_capture.take() {
                                     if let Ok(final_samples) = capture.stop().await {
@@ -2855,7 +2861,13 @@ impl Daemon {
                                         }
                                     }
                                 }
-                                self.restore_ducked_media_streams();
+                                self.restore_recording_media();
+
+                                self.play_feedback(SoundEvent::RecordingStop);
+
+                                if self.config.output.notification.on_recording_stop {
+                                    send_notification("Recording Stopped", "Transcribing...", self.config.output.notification.show_engine_icon, self.config.engine, &self.config.output.notification.urgency).await;
+                                }
 
                                 let transcriber = match self.get_transcriber_for_recording(
                                     model_override.as_deref(),
@@ -2962,6 +2974,8 @@ impl Daemon {
                                     }
                                 }
 
+                                self.suppress_recording_media().await;
+
                                 if self.try_start_streaming(
                                     &transcriber_preloaded,
                                     &mut state,
@@ -2996,8 +3010,6 @@ impl Daemon {
                                             }
                                             self.update_state("recording");
                                             self.play_feedback(SoundEvent::RecordingStart);
-                                            self.pause_media_players().await;
-                                            self.duck_media_streams().await;
 
                                             // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                             if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -3008,6 +3020,7 @@ impl Daemon {
                                         }
                                         Err(()) => {
                                             // Helper already logged and played the error sound.
+                                            self.restore_recording_media();
                                             cleanup_profile_override();
                                         }
                                     }
@@ -3016,27 +3029,14 @@ impl Daemon {
                                 tracing::info!("Toggle stop while streaming; closing capture");
                                 self.stop_streaming_capture(&mut audio_capture).await;
                             } else if let State::Recording { model_override: current_model_override, .. } = &state {
-                                let transcriber = match self.get_transcriber_for_recording(
-                                    current_model_override.as_deref(),
-                                    &transcriber_preloaded,
-                                ).await {
-                                    Ok(t) => Some(t),
-                                    Err(()) => {
-                                        if let Some(mut capture) = audio_capture.take() {
-                                            let _ = capture.stop().await;
-                                            self.restore_ducked_media_streams();
-                                        }
-                                        state = State::Idle;
-                                        self.update_state("idle");
-                                        continue;
-                                    }
-                                };
+                                let model_override = current_model_override.clone();
 
                                 // Stop recording and start transcription
                                 self.start_transcription_task(
                                     &mut state,
                                     &mut audio_capture,
-                                    transcriber,
+                                    model_override,
+                                    &transcriber_preloaded,
                                 ).await;
                             } else if state.is_eager_recording() {
                                 // Handle eager recording stop in toggle mode - extract model_override first
@@ -3048,12 +3048,6 @@ impl Daemon {
                                 let duration = state.recording_duration().unwrap_or_default();
                                 tracing::info!("Eager recording stopped ({:.1}s)", duration.as_secs_f32());
 
-                                self.play_feedback(SoundEvent::RecordingStop);
-
-                                if self.config.output.notification.on_recording_stop {
-                                    send_notification("Recording Stopped", "Transcribing...", self.config.output.notification.show_engine_icon, self.config.engine, &self.config.output.notification.urgency).await;
-                                }
-
                                 // Stop audio capture and get remaining samples
                                 if let Some(mut capture) = audio_capture.take() {
                                     if let Ok(final_samples) = capture.stop().await {
@@ -3062,7 +3056,13 @@ impl Daemon {
                                         }
                                     }
                                 }
-                                self.restore_ducked_media_streams();
+                                self.restore_recording_media();
+
+                                self.play_feedback(SoundEvent::RecordingStop);
+
+                                if self.config.output.notification.on_recording_stop {
+                                    send_notification("Recording Stopped", "Transcribing...", self.config.output.notification.show_engine_icon, self.config.engine, &self.config.output.notification.urgency).await;
+                                }
 
                                 let transcriber = match self.get_transcriber_for_recording(
                                     model_override.as_deref(),
@@ -3115,7 +3115,7 @@ impl Daemon {
                                 if let Some(mut capture) = audio_capture.take() {
                                     let _ = capture.stop().await;
                                 }
-                                self.restore_ducked_media_streams();
+                                self.restore_recording_media();
 
                                 // Cancel any pending model load task
                                 if let Some(task) = self.model_load_task.take() {
@@ -3191,7 +3191,7 @@ impl Daemon {
                         if let Some(mut capture) = audio_capture.take() {
                             let _ = capture.stop().await;
                         }
-                        self.restore_ducked_media_streams();
+                        self.restore_recording_media();
 
                         // Cancel any pending model load task
                         if let Some(task) = self.model_load_task.take() {
@@ -3326,25 +3326,9 @@ impl Daemon {
                         cleanup_bool_override("smart_auto_submit");
 
                         let model_override = match &state {
-                            State::Recording { model_override, .. } => model_override.as_deref(),
-                            State::EagerRecording { model_override, .. } => model_override.as_deref(),
+                            State::Recording { model_override, .. } => model_override.clone(),
+                            State::EagerRecording { model_override, .. } => model_override.clone(),
                             _ => None,
-                        };
-
-                        let transcriber = match self.get_transcriber_for_recording(
-                            model_override,
-                            &transcriber_preloaded,
-                        ).await {
-                            Ok(t) => Some(t),
-                            Err(()) => {
-                                if let Some(mut capture) = audio_capture.take() {
-                                    let _ = capture.stop().await;
-                                    self.restore_ducked_media_streams();
-                                }
-                                state = State::Idle;
-                                self.update_state("idle");
-                                continue;
-                            }
                         };
 
                         if state.is_eager_recording() {
@@ -3355,18 +3339,27 @@ impl Daemon {
                                     }
                                 }
                             }
-                            self.restore_ducked_media_streams();
+                            self.restore_recording_media();
 
-                            if let Some(transcriber) = transcriber {
-                                self.update_state("transcribing");
-
-                                if let Some(text) = self.finish_eager_recording(&mut state, transcriber).await {
-                                    state = State::Transcribing { audio: Vec::new() };
-                                    self.handle_transcription_result(&mut state, Ok(Ok(text))).await;
-                                } else {
-                                    tracing::debug!("Eager recording timeout produced empty result");
+                            let transcriber = match self.get_transcriber_for_recording(
+                                model_override.as_deref(),
+                                &transcriber_preloaded,
+                            ).await {
+                                Ok(transcriber) => transcriber,
+                                Err(()) => {
                                     self.reset_to_idle(&mut state).await;
+                                    continue;
                                 }
+                            };
+
+                            self.update_state("transcribing");
+
+                            if let Some(text) = self.finish_eager_recording(&mut state, transcriber).await {
+                                state = State::Transcribing { audio: Vec::new() };
+                                self.handle_transcription_result(&mut state, Ok(Ok(text))).await;
+                            } else {
+                                tracing::debug!("Eager recording timeout produced empty result");
+                                self.reset_to_idle(&mut state).await;
                             }
                             eager_transcriber = None;
                         } else {
@@ -3377,7 +3370,8 @@ impl Daemon {
                             self.start_transcription_task(
                                 &mut state,
                                 &mut audio_capture,
-                                transcriber,
+                                model_override,
+                                &transcriber_preloaded,
                             ).await;
                         }
                     }
@@ -3455,6 +3449,8 @@ impl Daemon {
                             }
                         }
 
+                        self.suppress_recording_media().await;
+
                         if self.try_start_streaming(
                             &transcriber_preloaded,
                             &mut state,
@@ -3487,10 +3483,8 @@ impl Daemon {
                                             model_override,
                                         };
                                     }
-                                            self.update_state("recording");
-                                            self.play_feedback(SoundEvent::RecordingStart);
-                                            self.pause_media_players().await;
-                                            self.duck_media_streams().await;
+                                    self.update_state("recording");
+                                    self.play_feedback(SoundEvent::RecordingStart);
 
                                     // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                     if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -3501,6 +3495,7 @@ impl Daemon {
                                 }
                                 Err(()) => {
                                     // Helper already logged and played the error sound.
+                                    self.restore_recording_media();
                                 }
                             }
                         }
@@ -3522,26 +3517,13 @@ impl Daemon {
                         streaming_session = None;
                         streaming_chain = None;
                     } else if let State::Recording { model_override, .. } = &state {
-                        let transcriber = match self.get_transcriber_for_recording(
-                            model_override.as_deref(),
-                            &transcriber_preloaded,
-                        ).await {
-                            Ok(t) => Some(t),
-                            Err(()) => {
-                                if let Some(mut capture) = audio_capture.take() {
-                                    let _ = capture.stop().await;
-                                    self.restore_ducked_media_streams();
-                                }
-                                state = State::Idle;
-                                self.update_state("idle");
-                                continue;
-                            }
-                        };
+                        let model_override = model_override.clone();
 
                         self.start_transcription_task(
                             &mut state,
                             &mut audio_capture,
-                            transcriber,
+                            model_override,
+                            &transcriber_preloaded,
                         ).await;
                     } else if state.is_eager_recording() {
                         // Handle eager recording stop via external trigger - extract model_override first
@@ -3553,12 +3535,6 @@ impl Daemon {
                         let duration = state.recording_duration().unwrap_or_default();
                         tracing::info!("Eager recording stopped ({:.1}s)", duration.as_secs_f32());
 
-                        self.play_feedback(SoundEvent::RecordingStop);
-
-                        if self.config.output.notification.on_recording_stop {
-                            send_notification("Recording Stopped", "Transcribing...", self.config.output.notification.show_engine_icon, self.config.engine, &self.config.output.notification.urgency).await;
-                        }
-
                         // Stop audio capture and get remaining samples
                         if let Some(mut capture) = audio_capture.take() {
                             if let Ok(final_samples) = capture.stop().await {
@@ -3567,7 +3543,13 @@ impl Daemon {
                                 }
                             }
                         }
-                        self.restore_ducked_media_streams();
+                        self.restore_recording_media();
+
+                        self.play_feedback(SoundEvent::RecordingStop);
+
+                        if self.config.output.notification.on_recording_stop {
+                            send_notification("Recording Stopped", "Transcribing...", self.config.output.notification.show_engine_icon, self.config.engine, &self.config.output.notification.urgency).await;
+                        }
 
                         let transcriber = match self.get_transcriber_for_recording(
                             model_override.as_deref(),
@@ -3900,6 +3882,21 @@ impl Daemon {
                     break;
                 }
             }
+        }
+
+        // Stop any active dictation capture before shutting down and always
+        // restore media that this daemon suppressed for the session.
+        let streaming_task = streaming_handle.take().map(|handle| {
+            let _ = handle.cancel.send(());
+            handle.task
+        });
+        self.cut_streaming_audio();
+        if let Some(mut capture) = audio_capture.take() {
+            let _ = capture.stop().await;
+        }
+        self.restore_recording_media();
+        if let Some(task) = streaming_task {
+            let _ = task.await;
         }
 
         // Cleanup hotkey listener

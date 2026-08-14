@@ -49,8 +49,8 @@ sample_rate = 16000
 # Maximum recording duration in seconds (safety limit)
 max_duration_secs = 60
 
-# Pause MPRIS media players (Spotify, Firefox, etc.) when recording starts,
-# resume them when recording stops. Talks D-Bus directly; no external
+# Pause MPRIS media players (Spotify, Firefox, etc.) before recording starts,
+# then resume them as soon as recording stops. Talks D-Bus directly; no external
 # playerctl binary required.
 # pause_media = false
 

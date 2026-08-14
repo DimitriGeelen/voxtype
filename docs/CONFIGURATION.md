@@ -369,7 +369,7 @@ max_duration_secs = 120  # Allow 2-minute recordings
 **Default:** `false`
 **Required:** No
 
-When `true`, pauses currently playing MPRIS media players when recording starts and resumes only those players after output completes.
+When `true`, pauses currently playing MPRIS media players before microphone capture starts and resumes only those players as soon as capture stops. Transcription and text output continue without keeping playback paused.
 
 ```toml
 [audio]
