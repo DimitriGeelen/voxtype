@@ -41,6 +41,7 @@ optdepends=(
     'cuda: GPU acceleration via CUDA 13 for ONNX engines (NVIDIA GPUs, requires driver 580+)'
     'cuda12.6: GPU acceleration via CUDA 12 for ONNX engines (older NVIDIA setups)'
     'rocm-hip-runtime: GPU acceleration via MIGraphX for ONNX engines (AMD GPUs)'
+    'migraphx: required alongside rocm-hip-runtime for the MIGraphX provider (#444)'
     'ollama: local AI summarization for meeting mode'
     'gtk4-layer-shell: runtime for the GTK4 on-screen mic visualizer (voxtype-osd-gtk4)'
     'quickshell: Quickshell-based on-screen display frontend (opt in via [osd] frontend = "quickshell")'

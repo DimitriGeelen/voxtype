@@ -74,6 +74,80 @@ fn detect_active_parakeet_backend() -> Option<String> {
     None
 }
 
+/// Parse `ldd` output for dependencies the dynamic linker could not resolve.
+///
+/// Lines of interest look like `\tlibmigraphx_c.so.3 => not found`.
+fn parse_ldd_missing(output: &str) -> Vec<String> {
+    let mut missing: Vec<String> = output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (name, rest) = line.split_once("=>")?;
+            if rest.trim() == "not found" {
+                Some(name.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
+/// Shared libraries an ONNX GPU execution provider needs but cannot resolve.
+///
+/// The GPU binaries dlopen `libonnxruntime_providers_<ep>.so` at runtime,
+/// relative to their own location. When the system libraries that provider
+/// links against are absent, ORT fails to register the execution provider and
+/// falls back to CPU without saying so. Reporting "Active backend: ONNX GPU
+/// (MIGraphX)" in that state tells the user the opposite of the truth (#444:
+/// the Arch package shipped voxtype-onnx-migraphx with no migraphx dependency).
+///
+/// Returns `None` when the check cannot be performed (no provider library
+/// alongside the binary, or no `ldd`), and `Some(vec![])` when every
+/// dependency resolves.
+fn unresolved_provider_deps(binary_name: &str) -> Option<Vec<String>> {
+    let resolved = fs::canonicalize(Path::new(VOXTYPE_LIB_DIR).join(binary_name)).ok()?;
+    let dir = resolved.parent()?;
+
+    // Providers sit next to the binary; ORT locates them via /proc/self/exe.
+    let provider = ["migraphx", "cuda", "rocm"]
+        .iter()
+        .map(|ep| dir.join(format!("libonnxruntime_providers_{ep}.so")))
+        .find(|p| p.exists())?;
+
+    let output = Command::new("ldd").arg(&provider).output().ok()?;
+    if !output.status.success() && output.stdout.is_empty() {
+        return None;
+    }
+    Some(parse_ldd_missing(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Warn when the active GPU backend cannot actually load its execution
+/// provider, so `--status` stops advertising acceleration that is not running.
+fn warn_if_provider_unloadable(binary_name: &str) {
+    let Some(missing) = unresolved_provider_deps(binary_name) else {
+        return;
+    };
+    if missing.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("  WARNING: this backend is selected but cannot load. ONNX Runtime will");
+    println!("           fall back to CPU. Missing shared libraries:");
+    for lib in &missing {
+        println!("             {lib}");
+    }
+    if binary_name.contains("migraphx") || binary_name.contains("rocm") {
+        println!("           Install the AMD runtime, e.g. on Arch:");
+        println!("             sudo pacman -S migraphx rocm-hip-runtime");
+    } else if binary_name.contains("cuda") {
+        println!("           Install the matching NVIDIA CUDA runtime for this variant.");
+    }
+}
+
 /// Available backend variants
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Backend {
@@ -512,6 +586,7 @@ pub fn show_status() {
                 "  Binary: {}",
                 Path::new(VOXTYPE_LIB_DIR).join(&target).display()
             );
+            warn_if_provider_unloadable(&target);
         } else {
             println!("Active backend: Parakeet (unknown variant)");
         }
@@ -836,6 +911,10 @@ pub fn enable() -> anyhow::Result<()> {
         }
 
         println!("Switched to ONNX ({}) backend.", backend_name);
+        // Selecting a backend whose execution provider cannot load is how
+        // users end up believing they have GPU acceleration while running on
+        // CPU (#444). Say so at the point of the switch, not just in --status.
+        warn_if_provider_unloadable(backend_binary);
         println!();
         println!("Restart voxtype to use GPU acceleration:");
         println!("  systemctl --user restart voxtype");
@@ -991,4 +1070,47 @@ fn switch_backend_tiered_parakeet(binary_name: &str) -> anyhow::Result<()> {
     }
 
     install_active_binary(active_bin, &binary_path, "setup onnx --enable")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ldd_missing_finds_unresolved_deps() {
+        // Shape of ldd output on a host without the AMD runtime installed,
+        // which is the #444 failure: the provider is present, its deps are not.
+        let output = "\tlinux-vdso.so.1 (0x00007ffd1b5f2000)\n\
+                      \tlibmigraphx_c.so.3 => not found\n\
+                      \tlibamdhip64.so.7 => not found\n\
+                      \tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f83de9ce000)\n\
+                      \tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f83de645000)\n";
+        assert_eq!(
+            parse_ldd_missing(output),
+            vec!["libamdhip64.so.7", "libmigraphx_c.so.3"]
+        );
+    }
+
+    #[test]
+    fn parse_ldd_missing_empty_when_all_resolve() {
+        let output =
+            "\tlibmigraphx_c.so.3 => /opt/rocm/lib/libmigraphx_c.so.3 (0x00007f83e06e9000)\n\
+                      \tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f83de645000)\n";
+        assert!(parse_ldd_missing(output).is_empty());
+    }
+
+    #[test]
+    fn parse_ldd_missing_ignores_static_and_vdso_lines() {
+        // Lines without "=>" must not be mistaken for dependencies.
+        let output = "\tlinux-vdso.so.1 (0x00007ffd1b5f2000)\n\
+                      \t/lib64/ld-linux-x86-64.so.2 (0x00007f83e0a1c000)\n\
+                      \tstatically linked\n";
+        assert!(parse_ldd_missing(output).is_empty());
+    }
+
+    #[test]
+    fn parse_ldd_missing_dedupes() {
+        let output = "\tlibfoo.so.1 => not found\n\tlibfoo.so.1 => not found\n";
+        assert_eq!(parse_ldd_missing(output), vec!["libfoo.so.1"]);
+    }
 }
