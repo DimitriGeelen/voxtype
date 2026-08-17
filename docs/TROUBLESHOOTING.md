@@ -849,6 +849,36 @@ You can also enable it via CLI flag (`--wtype-shift-prefix`) or environment vari
 type_delay_ms = 10  # Try 10-50ms
 ```
 
+### Non-ASCII characters move to the front of the text (GNOME, type mode)
+
+**Symptom:** Dictating text with non-ASCII characters (umlauts, accents, ß)
+into GTK applications (GNOME Terminal, GNOME Text Editor) delivers them
+clustered at the start of the output: `Müll äöüß` arrives as `üäöüß Mll `.
+The log (`journalctl --user -u voxtype`) shows the correct transcription,
+and Chrome or other non-GTK apps receive the same text correctly. Short
+dictations often arrive intact, longer ones reliably fail.
+
+**Cause:** IBus, GNOME's default input method, reorders non-ASCII key
+events relative to ASCII when synthetic input arrives faster than human
+typing. The events leave the typing tool (eitype) in the correct order,
+so this is neither a voxtype nor an eitype bug. Reported upstream as
+ibus/ibus#2934; details and measurements in
+Adam-D-Lewis/eitype#21.
+
+**Solution:** Use paste mode, which transfers the text atomically through
+the clipboard and cannot be reordered:
+
+```toml
+[output]
+mode = "paste"
+paste_keys = "ctrl+shift+v"  # terminal convention; GUI apps expect ctrl+v
+```
+
+Partial alternatives: `type_delay_ms` shrinks the displacement but does
+not remove it (about 100 ms per key would be needed), and launching the
+receiving app with `GTK_IM_MODULE=simple` avoids the bug at the cost of
+disabling IBus features for that app.
+
 ### Clipboard not working
 
 **Cause:** wl-copy not installed or Wayland session issue.
