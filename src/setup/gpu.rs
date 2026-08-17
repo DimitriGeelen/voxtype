@@ -17,7 +17,7 @@
 //!
 //! This sets VK_LOADER_DRIVERS_SELECT internally to filter Vulkan ICDs.
 
-use super::binary::install_active_binary;
+use super::binary::{install_active_binary, resolve_active_binary};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
@@ -43,35 +43,33 @@ fn get_active_binary_path() -> &'static str {
     VOXTYPE_BIN
 }
 
-/// Check if the current symlink points to a Parakeet binary
-/// Follows symlink chains to find the final target
+/// Resolve the real binary `/usr/bin/voxtype` dispatches to.
+///
+/// GPU and ONNX installs replace the symlink with a shell wrapper that
+/// `exec`s the binary by canonical path, so ORT's provider lookup lands in
+/// the right subdirectory. `fs::canonicalize` on that wrapper returns the
+/// wrapper itself, whose filename is just "voxtype", which used to make
+/// every check below conclude no ONNX backend was active. `setup onnx
+/// --status` already resolved this correctly via `resolve_active_binary`;
+/// share that instead of keeping a second, wrapper-blind implementation.
+fn resolved_active_binary_name() -> Option<String> {
+    let resolved = resolve_active_binary(get_active_binary_path())?;
+    resolved
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+}
+
+/// Check if the active binary is a Parakeet/ONNX binary
 fn is_parakeet_binary_active() -> bool {
-    let active_bin = get_active_binary_path();
-    // Use canonicalize to resolve all symlinks and get the final target
-    if let Ok(resolved) = fs::canonicalize(active_bin) {
-        if let Some(target_name) = resolved.file_name() {
-            if let Some(name) = target_name.to_str() {
-                return name.contains("onnx") || name.contains("parakeet");
-            }
-        }
-    }
-    false
+    resolved_active_binary_name()
+        .map(|name| name.contains("onnx") || name.contains("parakeet"))
+        .unwrap_or(false)
 }
 
 /// Get the name of the active Parakeet backend binary
 fn detect_active_parakeet_backend() -> Option<String> {
-    let active_bin = get_active_binary_path();
-    // Use canonicalize to resolve all symlinks and get the final target
-    if let Ok(resolved) = fs::canonicalize(active_bin) {
-        if let Some(target_name) = resolved.file_name() {
-            if let Some(name) = target_name.to_str() {
-                if name.contains("onnx") || name.contains("parakeet") {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-    None
+    resolved_active_binary_name().filter(|name| name.contains("onnx") || name.contains("parakeet"))
 }
 
 /// Parse `ldd` output for dependencies the dynamic linker could not resolve.
