@@ -1243,7 +1243,9 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     for (i, model) in MODELS.iter().enumerate() {
         let filename = get_model_filename(model.name);
         let model_path = models_dir.join(&filename);
-        let installed = model_path.exists();
+        // Validated rather than a bare exists(), so a truncated download
+        // isn't advertised as installed.
+        let installed = whisper_model_complete(&model_path, model.name);
 
         let is_current = is_whisper_engine && model.name == current_whisper_model;
         let star = if is_current { "*" } else { " " };
@@ -1803,10 +1805,87 @@ async fn restart_daemon_if_running() {
 // =============================================================================
 
 /// Download a specific Whisper model using curl
+/// Scratch path a download occupies until it has been validated: a hidden
+/// `.part` sibling of `dest`, in the same directory so the final rename is
+/// an atomic same-filesystem `rename(2)`.
+///
+/// The name is both dot-prefixed and `.part`-suffixed so no installed-model
+/// check can mistake it for a real model file.
+fn part_path(dest: &Path) -> std::path::PathBuf {
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("model.bin");
+    match dest.parent() {
+        Some(parent) => parent.join(format!(".{}.part", name)),
+        None => std::path::PathBuf::from(format!(".{}.part", name)),
+    }
+}
+
+/// Move a validated download onto its final path.
+///
+/// `rename(2)` within one directory is atomic, so a concurrent reader sees
+/// either no file or the complete one, never a half-written model.
+fn promote_part(part: &Path, dest: &Path) -> anyhow::Result<()> {
+    std::fs::rename(part, dest).map_err(|e| {
+        let _ = std::fs::remove_file(part);
+        anyhow::anyhow!("Failed to move {} into place: {}", dest.display(), e)
+    })
+}
+
+/// Expected size of a Whisper model in MiB, from the catalog.
+fn whisper_expected_mib(model_name: &str) -> Option<u32> {
+    MODELS
+        .iter()
+        .find(|m| m.name == model_name)
+        .map(|m| m.size_mb)
+}
+
+/// Whether a Whisper model file on disk looks complete.
+///
+/// Whisper was the only engine whose installed-check was a bare
+/// `path.exists()`; every ONNX engine already pairs existence with a
+/// `validate_*` call. The catalog carries approximate sizes rather than
+/// checksums, so this is a floor check: a file at least 90% of the expected
+/// size is treated as complete, which catches the truncation case while
+/// tolerating the catalog's rounding.
+pub fn whisper_model_complete(path: &Path, model_name: &str) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    let Some(expected_mib) = whisper_expected_mib(model_name) else {
+        // Unknown model name: fall back to mere existence rather than
+        // calling a file the catalog doesn't describe "incomplete".
+        return true;
+    };
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let floor = (expected_mib as u64) * 1024 * 1024 * 9 / 10;
+    meta.len() >= floor
+}
+
+/// Validate a freshly downloaded Whisper model before promoting it.
+fn validate_whisper_download(part: &Path, model_name: &str) -> anyhow::Result<()> {
+    if !whisper_model_complete(part, model_name) {
+        let actual = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+        let expected = whisper_expected_mib(model_name).unwrap_or(0);
+        anyhow::bail!(
+            "{} is {:.0} MB but '{}' should be about {} MB",
+            part.display(),
+            actual as f64 / 1024.0 / 1024.0,
+            model_name,
+            expected
+        );
+    }
+    Ok(())
+}
+
 pub fn download_model(model_name: &str) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
     let filename = get_model_filename(model_name);
     let model_path = models_dir.join(&filename);
+    let part = part_path(&model_path);
 
     // Ensure directory exists
     std::fs::create_dir_all(&models_dir)?;
@@ -1816,19 +1895,30 @@ pub fn download_model(model_name: &str) -> anyhow::Result<()> {
     println!("\nDownloading {}...", model_name);
     println!("URL: {}", url);
 
-    // Use curl for downloading - it handles progress display and redirects
+    // Download to the .part sibling, never to model_path. curl's own
+    // non-zero exit used to trigger a cleanup of model_path, but that
+    // cleanup never runs when the process is killed outright (Ctrl-C,
+    // SIGPIPE from a closed progress consumer, SIGKILL). The truncated
+    // file then sat at the final path and every installed-check reported
+    // the model as present while the daemon failed to load it.
     let status = Command::new("curl")
         .args([
             "-L",             // Follow redirects
             "--progress-bar", // Show progress bar
             "-o",
-            model_path.to_str().unwrap_or("model.bin"),
+            part.to_str().unwrap_or("model.bin.part"),
             &url,
         ])
         .status();
 
     match status {
         Ok(exit_status) if exit_status.success() => {
+            if let Err(e) = validate_whisper_download(&part, model_name) {
+                let _ = std::fs::remove_file(&part);
+                print_failure(&format!("Download incomplete: {}", e));
+                anyhow::bail!("Download failed validation: {}", e)
+            }
+            promote_part(&part, &model_path)?;
             print_success(&format!("Saved to {:?}", model_path));
             Ok(())
         }
@@ -1837,11 +1927,11 @@ pub fn download_model(model_name: &str) -> anyhow::Result<()> {
                 "Download failed: curl exited with code {}",
                 exit_status.code().unwrap_or(-1)
             ));
-            // Clean up partial download
-            let _ = std::fs::remove_file(&model_path);
+            let _ = std::fs::remove_file(&part);
             anyhow::bail!("Download failed")
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&part);
             print_failure(&format!("Failed to run curl: {}", e));
             print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
             anyhow::bail!("curl not available: {}", e)
@@ -3896,5 +3986,65 @@ mode = "type"
             got,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+    }
+
+    #[test]
+    fn part_path_is_hidden_sibling_no_check_can_match() {
+        let dest = Path::new("/models/ggml-base.bin");
+        let part = part_path(dest);
+        assert_eq!(part, Path::new("/models/.ggml-base.bin.part"));
+        // Must not collide with the real name any installed-check looks for.
+        assert_ne!(part, dest.to_path_buf());
+        assert!(part.file_name().unwrap().to_str().unwrap().starts_with('.'));
+    }
+
+    #[test]
+    fn truncated_model_is_not_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ggml-base.bin");
+        // base is catalogued at 142 MiB; 40 MB is the interrupted-download case.
+        std::fs::write(&path, vec![0u8; 40 * 1024 * 1024]).unwrap();
+        assert!(!whisper_model_complete(&path, "base"));
+    }
+
+    #[test]
+    fn full_size_model_is_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ggml-tiny.bin");
+        // tiny is catalogued at 75 MiB; real files land slightly under, so the
+        // check floors at 90% rather than demanding the exact catalog number.
+        std::fs::write(&path, vec![0u8; 71 * 1024 * 1024]).unwrap();
+        assert!(whisper_model_complete(&path, "tiny"));
+    }
+
+    #[test]
+    fn missing_model_is_not_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!whisper_model_complete(
+            &dir.path().join("nope.bin"),
+            "base"
+        ));
+    }
+
+    #[test]
+    fn unknown_model_name_falls_back_to_existence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ggml-custom.bin");
+        std::fs::write(&path, b"tiny").unwrap();
+        // Not in the catalog, so we have no size to judge against and must
+        // not call a user-supplied model incomplete.
+        assert!(whisper_model_complete(&path, "custom-finetune"));
+    }
+
+    #[test]
+    fn promote_part_renames_and_clears_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("ggml-base.bin");
+        let part = part_path(&dest);
+        std::fs::write(&part, b"payload").unwrap();
+        promote_part(&part, &dest).unwrap();
+        assert!(dest.exists());
+        assert!(!part.exists());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"payload");
     }
 }
