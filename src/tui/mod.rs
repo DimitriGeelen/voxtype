@@ -23,8 +23,11 @@ mod text_section;
 mod vad_section;
 mod waybar_section;
 
+// Exported beyond the crate so the binary's `voxtype config` handlers write
+// through the same atomic-save-and-validate path the TUI uses, rather than
+// growing a second config writer.
 #[allow(unused_imports)]
-pub(crate) use config_editor::{ConfigEditor, EditorError};
+pub use config_editor::{ConfigEditor, EditorError};
 
 use crossterm::{
     event::{
@@ -198,20 +201,25 @@ fn dispatch_action(
     }
 }
 
-/// Run `voxtype setup model <name>` in the parent shell so the user sees the
-/// download progress. We invoke whichever voxtype is on PATH because that's
-/// the user's installed binary; the TUI's own image might be an
-/// uninstalled host build that doesn't have the engine feature flags.
+/// Download a model in the parent shell so the user sees the progress. We
+/// invoke whichever voxtype is on PATH because that's the user's installed
+/// binary; the TUI's own image might be an uninstalled host build that
+/// doesn't have the engine feature flags.
+///
+/// `setup model` takes no positional argument (see `SetupAction::Model` in
+/// `src/cli/setup.rs`) — the download entry point is the top-level
+/// `setup --download --model <NAME>`. Passing the name positionally made
+/// clap reject the command before it did anything.
 fn run_setup_model(engine: &str, model: &str) -> Result<(), String> {
     let _ = engine;
     let status = std::process::Command::new("voxtype")
-        .args(["setup", "model", model])
+        .args(["setup", "--download", "--model", model])
         .status()
-        .map_err(|e| format!("could not invoke `voxtype setup model`: {}", e))?;
+        .map_err(|e| format!("could not invoke `voxtype setup --download`: {}", e))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("voxtype setup model exited with {}", status))
+        Err(format!("voxtype setup --download exited with {}", status))
     }
 }
 

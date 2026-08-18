@@ -20,6 +20,7 @@ use super::common::{
 };
 use super::config_editor::{ConfigEditor, EditorError};
 use crate::config::TranscriptionEngine;
+use crate::model_catalog::{default_model, installed_models_for, model_catalog};
 use crate::setup::binary::{self, EngineFamily, InstallKind, Variant};
 use crate::setup::model;
 use strum::IntoEnumIterator;
@@ -116,45 +117,6 @@ pub struct AllFields {
     pub co_threads: Option<i64>,
     pub co_on_demand_loading: bool,
     pub co_section_existed: bool,
-}
-
-/// Model catalogs per engine. Whisper/Parakeet/Moonshine/SenseVoice come from
-/// the central setup::model registry; Paraformer/Dolphin/Omnilingual aren't
-/// registered yet, so we hardcode their canonical defaults.
-fn model_catalog(engine: &str) -> Vec<&'static str> {
-    match engine {
-        "whisper" => model::valid_model_names(),
-        "parakeet" => model::valid_parakeet_model_names(),
-        "moonshine" => model::valid_moonshine_model_names(),
-        "sensevoice" => model::valid_sensevoice_model_names(),
-        "paraformer" => vec!["paraformer-zh", "paraformer-en"],
-        "dolphin" => vec!["dolphin-base"],
-        "omnilingual" => vec!["omnilingual-300m"],
-        "cohere" => vec![
-            "cohere-transcribe-q4f16",
-            "cohere-transcribe-q4",
-            "cohere-transcribe-int8",
-            "cohere-transcribe-fp16",
-        ],
-        _ => Vec::new(),
-    }
-}
-
-/// Default model name baked into voxtype for each ONNX engine. Used when we
-/// have to materialize a fresh `[engine]` table because the user just made it
-/// the active engine for the first time — those structs require `model` and
-/// the validator rejects a partial table.
-const fn default_model(engine: &str) -> &'static str {
-    match engine.as_bytes() {
-        b"parakeet" => "parakeet-tdt-0.6b-v3",
-        b"moonshine" => "base",
-        b"sensevoice" => "sensevoice-small",
-        b"paraformer" => "paraformer-zh",
-        b"dolphin" => "dolphin-base",
-        b"omnilingual" => "omnilingual-300m",
-        b"cohere" => "cohere-transcribe-q4f16",
-        _ => "",
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1782,26 +1744,6 @@ fn model_guidance(engine: &str, current: &str) -> Vec<Line<'static>> {
         )));
     }
     lines
-}
-
-/// Installed models on disk for a given engine. Mirrors the inventory the old
-/// Models section used to show.
-fn installed_models_for(engine: &str) -> Vec<String> {
-    use crate::config::Config;
-    let dir = Config::models_dir();
-    let catalog = model_catalog(engine);
-    catalog
-        .into_iter()
-        .filter(|name| {
-            if engine == "whisper" {
-                dir.join(format!("ggml-{}.bin", name)).exists()
-            } else {
-                let p = dir.join(name);
-                p.exists() || p.is_dir()
-            }
-        })
-        .map(|s| s.to_string())
-        .collect()
 }
 
 fn display_engine(engine: &str) -> &'static str {

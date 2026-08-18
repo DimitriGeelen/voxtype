@@ -4,6 +4,7 @@
 //! PipeWire, PulseAudio, and ALSA backends.
 
 pub mod cpal_capture;
+pub mod devices;
 pub mod dual_capture;
 #[cfg(feature = "onnx-common")]
 pub mod enhance;

@@ -303,6 +303,48 @@ mod tests {
     }
 
     #[test]
+    fn test_setup_progress_format() {
+        let cli = Cli::parse_from([
+            "voxtype",
+            "setup",
+            "--download",
+            "--model",
+            "tiny.en",
+            "--progress-format",
+            "json",
+        ]);
+        match cli.command {
+            Some(Commands::Setup {
+                progress_format,
+                download,
+                model,
+                ..
+            }) => {
+                assert_eq!(progress_format, "json");
+                assert!(download);
+                assert_eq!(model.as_deref(), Some("tiny.en"));
+            }
+            _ => panic!("Expected Setup command"),
+        }
+
+        let cli = Cli::parse_from(["voxtype", "setup"]);
+        match cli.command {
+            Some(Commands::Setup {
+                progress_format, ..
+            }) => assert_eq!(
+                progress_format, "human",
+                "human output must stay the default"
+            ),
+            _ => panic!("Expected Setup command"),
+        }
+
+        assert!(
+            Cli::try_parse_from(["voxtype", "setup", "--progress-format", "ndjson"]).is_err(),
+            "unknown formats should be rejected at parse time"
+        );
+    }
+
+    #[test]
     fn test_setup_no_post_install_flag() {
         let cli = Cli::parse_from(["voxtype", "setup", "--no-post-install"]);
         match cli.command {
