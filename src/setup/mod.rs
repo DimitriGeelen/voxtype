@@ -9,6 +9,7 @@
 //! - Parakeet backend management
 //! - Compositor integration (modifier key fix)
 
+pub mod accel;
 #[cfg(target_os = "macos")]
 pub mod app_bundle;
 pub mod binary;
@@ -23,6 +24,7 @@ pub mod macos;
 pub mod manifest;
 pub mod model;
 pub mod parakeet;
+pub mod progress;
 pub mod quickshell;
 pub mod systemd;
 pub mod vad;
@@ -497,6 +499,42 @@ fn print_tool_status(tool: &OutputToolStatus, is_relevant: bool) {
     }
 }
 
+/// Which engine a `voxtype setup --model <name>` argument refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelKind {
+    Whisper,
+    Parakeet,
+    SenseVoice,
+}
+
+/// Resolve a `--model` name to the engine that owns it.
+///
+/// Whisper wins name collisions. `small` names both a Whisper model and
+/// SenseVoice's int8 export, and it meant Whisper for every release before
+/// SenseVoice existed, so resolving it to SenseVoice made
+/// `setup --download --model small` unable to fetch Whisper small at all: it
+/// failed the `sensevoice` feature gate on Whisper builds, and on ONNX builds
+/// it would have downloaded a different engine's model. SenseVoice's
+/// colliding names stay reachable under their directory form
+/// (`sensevoice-small`, `sensevoice-small-fp32`).
+pub(crate) fn classify_model_override(name: &str) -> anyhow::Result<ModelKind> {
+    if model::is_valid_model(name) {
+        Ok(ModelKind::Whisper)
+    } else if model::is_parakeet_model(name) {
+        Ok(ModelKind::Parakeet)
+    } else if model::is_sensevoice_model(name) {
+        Ok(ModelKind::SenseVoice)
+    } else {
+        anyhow::bail!(
+            "Unknown model '{}'.\n  Whisper: {}\n  Parakeet: {}\n  SenseVoice: {}",
+            name,
+            model::valid_model_names().join(", "),
+            model::valid_parakeet_model_names().join(", "),
+            model::sensevoice_setup_model_names().join(", "),
+        )
+    }
+}
+
 /// Run setup tasks (non-blocking, no red X errors)
 ///
 /// Flags:
@@ -504,12 +542,24 @@ fn print_tool_status(tool: &OutputToolStatus, is_relevant: bool) {
 /// - `model_override`: Specific model to download (use with `download`)
 /// - `quiet`: Suppress ALL output (for scripting/automation)
 /// - `no_post_install`: Suppress only "Next steps" instructions
+/// - `activate`: Also point the config at the model that was handled
+///
+/// `activate` is off by default because downloading is not selecting.
+/// Fetching a model used to rewrite `engine` and `<engine>.model` in the
+/// user's config as a side effect, which meant a GUI's Download button
+/// silently changed which engine the daemon would load, and the documented
+/// "pre-download your secondary models" sequence in `docs/CONFIGURATION.md`
+/// left the config pointing at whichever model happened to be fetched last.
+/// Model selection belongs to `voxtype config set`, the TUI, and the
+/// interactive picker (`voxtype setup model`), all of which write it
+/// explicitly.
 pub async fn run_setup(
     config: &Config,
     download: bool,
     model_override: Option<&str>,
     quiet: bool,
     no_post_install: bool,
+    activate: bool,
 ) -> anyhow::Result<()> {
     if !quiet {
         println!("Voxtype Setup\n");
@@ -544,29 +594,17 @@ pub async fn run_setup(
 
     let models_dir = Config::models_dir();
 
-    // Check if model_override is a Parakeet or SenseVoice model
-    let is_parakeet = model_override
-        .map(model::is_parakeet_model)
-        .unwrap_or(false);
-    let is_sensevoice = model_override
-        .map(model::is_sensevoice_model)
-        .unwrap_or(false);
+    // Set when the run ends with a model on disk that can't be loaded, so the
+    // summary doesn't report success over it.
+    let mut left_damaged = false;
 
-    // Validate model_override if provided (variable unused after this, each branch re-defines)
-    let _model_name: &str = match model_override {
-        Some(name) => {
-            // Validate the model name (check Whisper, Parakeet, and SenseVoice)
-            if !model::is_valid_model(name)
-                && !model::is_parakeet_model(name)
-                && !model::is_sensevoice_model(name)
-            {
-                let valid = model::valid_model_names().join(", ");
-                anyhow::bail!("Unknown model '{}'. Valid models are: {}", name, valid);
-            }
-            name
-        }
-        None => &config.whisper.model,
+    // Which engine `--model` named, rejecting names no engine claims.
+    let kind = match model_override {
+        Some(name) => Some(classify_model_override(name)?),
+        None => None,
     };
+    let is_parakeet = kind == Some(ModelKind::Parakeet);
+    let is_sensevoice = kind == Some(ModelKind::SenseVoice);
 
     if is_sensevoice {
         // Handle SenseVoice model
@@ -656,23 +694,25 @@ pub async fn run_setup(
                         .unwrap_or(0.0);
                     print_success(&format!("Model ready: {} ({:.0} MB)", model_name, size));
                 }
-                // Update config to use Parakeet
-                model::set_parakeet_config(model_name)?;
-                if !quiet {
-                    print_success(&format!(
-                        "Config updated: engine = \"parakeet\", model = \"{}\"",
-                        model_name
-                    ));
+                if activate {
+                    model::set_parakeet_config(model_name)?;
+                    if !quiet {
+                        print_success(&format!(
+                            "Config updated: engine = \"parakeet\", model = \"{}\"",
+                            model_name
+                        ));
+                    }
                 }
             } else if download {
                 model::download_parakeet_model(model_name)?;
-                // Update config to use Parakeet
-                model::set_parakeet_config(model_name)?;
-                if !quiet {
-                    print_success(&format!(
-                        "Config updated: engine = \"parakeet\", model = \"{}\"",
-                        model_name
-                    ));
+                if activate {
+                    model::set_parakeet_config(model_name)?;
+                    if !quiet {
+                        print_success(&format!(
+                            "Config updated: engine = \"parakeet\", model = \"{}\"",
+                            model_name
+                        ));
+                    }
                 }
             } else if !quiet {
                 print_info(&format!("Model '{}' not downloaded yet", model_name));
@@ -688,37 +728,34 @@ pub async fn run_setup(
             println!("\nWhisper model...");
         }
 
-        // Use model_override if provided, otherwise use config default
-        let model_name: &str = match model_override {
-            Some(name) => {
-                // Validate the model name
-                if !model::is_valid_model(name) {
-                    let whisper_models = model::valid_model_names().join(", ");
-                    let parakeet_models = model::valid_parakeet_model_names().join(", ");
-                    anyhow::bail!(
-                        "Unknown model '{}'. Valid Whisper models: {}. Valid Parakeet models: {}",
-                        name,
-                        whisper_models,
-                        parakeet_models
-                    );
-                }
-                name
-            }
-            None => &config.whisper.model,
-        };
+        // An override reaching here is already a known Whisper name; the
+        // config default is taken as-is, since it may be a path to a .bin.
+        let model_name: &str = model_override.unwrap_or(&config.whisper.model);
 
         let model_filename = crate::transcribe::whisper::get_model_filename(model_name);
         let model_path = models_dir.join(&model_filename);
 
-        if model_path.exists() {
+        // Existence isn't enough: a file left by an interrupted download from
+        // an older voxtype (or an error page saved under the model's name)
+        // must not read as ready, or `--download` would refuse to replace the
+        // very file the user is trying to repair. The ONNX branches already
+        // gate on their per-engine validators.
+        let damaged = if model_path.exists() {
+            model::validate_download(&model_path, None, model::ContentCheck::Ggml).err()
+        } else {
+            None
+        };
+
+        if model_path.exists() && damaged.is_none() {
+            let bytes = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
             if !quiet {
-                let size = std::fs::metadata(&model_path)
-                    .map(|m| m.len() as f64 / 1024.0 / 1024.0)
-                    .unwrap_or(0.0);
+                let size = bytes as f64 / 1024.0 / 1024.0;
                 print_success(&format!("Model ready: {} ({:.0} MB)", model_name, size));
             }
-            // If user explicitly requested this model, update config even if already downloaded
-            if model_override.is_some() {
+            // Report the existing file as complete so a progress bar driven by
+            // these events finishes rather than jumping straight to `done`.
+            progress::file_already_complete(model_name, &model_filename, bytes);
+            if activate {
                 model::set_model_config(model_name)?;
                 if !quiet {
                     print_success(&format!("Config updated to use '{}'", model_name));
@@ -726,26 +763,52 @@ pub async fn run_setup(
             }
         } else if download {
             if !quiet {
+                if let Some(problem) = &damaged {
+                    print_warning(&format!(
+                        "Existing '{}' is damaged ({}); replacing it",
+                        model_name, problem
+                    ));
+                }
                 println!("  Downloading {}...", model_name);
             }
             model::download_model(model_name)?;
-            // Update config to use the downloaded model
-            if model_override.is_some() {
+            if activate {
                 model::set_model_config(model_name)?;
                 if !quiet {
                     print_success(&format!("Config updated to use '{}'", model_name));
                 }
             }
-        } else if !quiet {
-            print_info(&format!("Model '{}' not downloaded yet", model_name));
-            println!("       Run: voxtype setup --download");
+        } else {
+            if let Some(problem) = &damaged {
+                left_damaged = true;
+                if !quiet {
+                    print_failure(&format!("Model '{}' is damaged: {}", model_name, problem));
+                    // A custom path isn't something --download can fetch.
+                    if model::is_valid_model(model_name) {
+                        println!(
+                            "       Replace it with: voxtype setup --download --model {}",
+                            model_name
+                        );
+                    } else {
+                        println!("       Replace the file, or point [whisper] model at a model voxtype can download.");
+                    }
+                }
+            } else if !quiet {
+                print_info(&format!("Model '{}' not downloaded yet", model_name));
+                println!("       Run: voxtype setup --download");
+            }
         }
     }
 
     // Summary
     if !quiet {
         println!("\n---");
-        println!("\x1b[32m✓ Setup complete!\x1b[0m");
+        if left_damaged {
+            // Don't call a run that ended with an unusable model a success.
+            println!("\x1b[33m⚠ Setup finished, but the configured model needs replacing.\x1b[0m");
+        } else {
+            println!("\x1b[32m✓ Setup complete!\x1b[0m");
+        }
     }
 
     // Show next steps unless --quiet or --no-post-install is passed
@@ -984,4 +1047,153 @@ pub async fn run_checks(config: &Config) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `small` is in both the Whisper and SenseVoice tables. Whisper has to
+    /// win, or `setup --download --model small` can never fetch Whisper small.
+    #[test]
+    fn whisper_wins_colliding_model_names() {
+        assert!(model::is_sensevoice_model("small"));
+        assert_eq!(
+            classify_model_override("small").unwrap(),
+            ModelKind::Whisper
+        );
+        assert_eq!(
+            classify_model_override("small.en").unwrap(),
+            ModelKind::Whisper
+        );
+    }
+
+    #[test]
+    fn sensevoice_models_stay_reachable_under_their_directory_name() {
+        assert_eq!(
+            classify_model_override("sensevoice-small").unwrap(),
+            ModelKind::SenseVoice
+        );
+        assert_eq!(
+            classify_model_override("sensevoice-small-fp32").unwrap(),
+            ModelKind::SenseVoice
+        );
+        // `small-fp32` doesn't collide with anything, so the short form works.
+        assert_eq!(
+            classify_model_override("small-fp32").unwrap(),
+            ModelKind::SenseVoice
+        );
+        assert_eq!(
+            model::sensevoice_dir_name("sensevoice-small"),
+            Some("sensevoice-small")
+        );
+    }
+
+    #[test]
+    fn parakeet_models_classify_as_parakeet() {
+        let name = model::valid_parakeet_model_names()[0];
+        assert_eq!(
+            classify_model_override(name).unwrap(),
+            ModelKind::Parakeet,
+            "{}",
+            name
+        );
+    }
+
+    /// Whatever `voxtype info models` advertises as a download argument has to
+    /// fetch that engine's model, not a same-named model from another engine.
+    ///
+    /// This is the invariant a GUI depends on: it lists models from
+    /// `info models --json` and hands `download_arg` straight to
+    /// `setup --download --model`. SenseVoice is the reason the field exists —
+    /// its catalog names (`small`) are Whisper model names too.
+    #[test]
+    fn advertised_download_args_resolve_to_their_own_engine() {
+        for engine in crate::model_catalog::CATALOG_ENGINES {
+            for model in crate::model_catalog::model_catalog(engine) {
+                let Some(arg) = crate::model_catalog::download_arg(engine, model) else {
+                    continue;
+                };
+                let expected = match *engine {
+                    "whisper" => ModelKind::Whisper,
+                    "parakeet" => ModelKind::Parakeet,
+                    "sensevoice" => ModelKind::SenseVoice,
+                    other => panic!(
+                        "'{}' advertises a download argument but run_setup has no branch for it",
+                        other
+                    ),
+                };
+                let got = classify_model_override(&arg).unwrap_or_else(|e| {
+                    panic!("{} model '{}' advertises '{}': {}", engine, model, arg, e)
+                });
+                assert_eq!(
+                    got, expected,
+                    "{} model '{}' advertises '{}', which downloads a {:?} model",
+                    engine, model, arg, got
+                );
+            }
+        }
+    }
+
+    /// A plain model name must fetch that exact model. Quantized variants are
+    /// separate catalog entries, never aliases reached by a plain name.
+    #[test]
+    fn quantized_variants_are_distinct_entries_not_aliases() {
+        let names = model::valid_parakeet_model_names();
+        assert!(names.contains(&"parakeet-tdt-0.6b-v2"), "{:?}", names);
+        assert!(names.contains(&"parakeet-tdt-0.6b-v2-int8"), "{:?}", names);
+
+        for name in &names {
+            // A registry entry keyed by the catalog name is what makes the
+            // files land in a directory of that name.
+            assert!(
+                !model::expected_file_names("parakeet", name).is_empty(),
+                "no registry entry for '{}'",
+                name
+            );
+            assert_eq!(
+                crate::model_catalog::model_dir_name("parakeet", name),
+                *name,
+                "'{}' would install under a different directory",
+                name
+            );
+        }
+
+        assert_ne!(
+            model::expected_file_names("parakeet", "parakeet-tdt-0.6b-v2"),
+            model::expected_file_names("parakeet", "parakeet-tdt-0.6b-v2-int8"),
+            "plain and int8 must not share a file list"
+        );
+    }
+
+    /// Moonshine and SenseVoice keep short config values while their files
+    /// live under a prefixed directory. Looking in the wrong place made
+    /// installed models report as missing.
+    #[test]
+    fn short_config_names_map_to_prefixed_directories() {
+        assert_eq!(
+            crate::model_catalog::model_dir_name("moonshine", "base"),
+            "moonshine-base"
+        );
+        assert_eq!(
+            crate::model_catalog::model_dir_name("sensevoice", "small"),
+            "sensevoice-small"
+        );
+        // Engines whose catalog names are already directory names.
+        assert_eq!(
+            crate::model_catalog::model_dir_name("dolphin", "dolphin-base"),
+            "dolphin-base"
+        );
+    }
+
+    /// A name no engine claims must fail rather than fall through to whisper,
+    /// where it would become a download for a nonexistent file.
+    #[test]
+    fn unknown_model_names_are_rejected() {
+        let err = classify_model_override("gargantuan-v9")
+            .expect_err("unknown model should be an error")
+            .to_string();
+        assert!(err.contains("Unknown model 'gargantuan-v9'"), "{}", err);
+        assert!(err.contains("large-v3-turbo"), "{}", err);
+    }
 }

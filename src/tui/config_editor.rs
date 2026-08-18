@@ -235,6 +235,15 @@ impl ConfigEditor {
         self.table(table)?.get(key).and_then(|i| i.as_value())
     }
 
+    /// The raw TOML value at `table.key`, or `None` when the key is absent.
+    ///
+    /// Callers that need to report what is *literally in the file* (as
+    /// opposed to a resolved value with defaults applied) use this to type
+    /// the value themselves — `voxtype config schema --json` reports both.
+    pub fn get_toml_value(&self, table: &str, key: &str) -> Option<&Value> {
+        self.value(table, key)
+    }
+
     /// Ensure a (possibly dotted) `[table]` path exists and return it as a
     /// mutable Item. Creates intermediate tables as needed.
     fn ensure_table(&mut self, dotted: &str) -> &mut Item {
