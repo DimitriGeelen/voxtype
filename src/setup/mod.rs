@@ -945,7 +945,7 @@ pub async fn run_checks(config: &Config) -> anyhow::Result<()> {
         let size = std::fs::metadata(&model_path)
             .map(|m| m.len() as f64 / 1024.0 / 1024.0)
             .unwrap_or(0.0);
-        if model::whisper_model_complete(&model_path, model_name) {
+        if crate::model_catalog::model_installed("whisper", model_name) {
             print_success(&format!(
                 "Model '{}' installed ({:.0} MB)",
                 model_name, size
