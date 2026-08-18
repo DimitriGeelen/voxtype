@@ -879,14 +879,26 @@ pub async fn run_checks(config: &Config) -> anyhow::Result<()> {
         let model_filename = crate::transcribe::whisper::get_model_filename(model_name);
         let model_path = models_dir.join(&model_filename);
 
-        if model_path.exists() {
-            let size = std::fs::metadata(&model_path)
-                .map(|m| m.len() as f64 / 1024.0 / 1024.0)
-                .unwrap_or(0.0);
+        let size = std::fs::metadata(&model_path)
+            .map(|m| m.len() as f64 / 1024.0 / 1024.0)
+            .unwrap_or(0.0);
+        if model::whisper_model_complete(&model_path, model_name) {
             print_success(&format!(
                 "Model '{}' installed ({:.0} MB)",
                 model_name, size
             ));
+        } else if model_path.exists() {
+            // Present but short: an interrupted download used to be reported
+            // as installed, then failed to load at runtime.
+            print_failure(&format!(
+                "Model '{}' is incomplete ({:.0} MB on disk)",
+                model_name, size
+            ));
+            println!(
+                "       Run: voxtype setup --download --model {}",
+                model_name
+            );
+            all_ok = false;
         } else {
             print_failure(&format!("Model '{}' not found", model_name));
             println!("       Run: voxtype setup --download");
