@@ -4197,8 +4197,21 @@ mode = "type"
     /// The whole staging sequence, offline: bytes land on the `.part` path,
     /// the destination stays absent until validation passes, and the promote
     /// is what makes the model visible.
+    /// The download tests drive the real curl path with `file://` URLs. Nix
+    /// builds run in a hermetic sandbox with no curl on PATH, where these
+    /// would fail for a reason unrelated to what they cover. Two of them
+    /// assert that a download *fails*, so without this guard they would pass
+    /// in the sandbox for the wrong reason.
+    fn curl_available() -> bool {
+        which::which("curl").is_ok()
+    }
+
     #[test]
     fn a_download_only_reaches_its_final_name_after_validation() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.bin");
         let mut bytes = GGML_MAGIC.to_vec();
@@ -4232,6 +4245,10 @@ mode = "type"
     /// reproducible without a network.
     #[test]
     fn a_failed_json_download_bails_and_removes_the_partial_file() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
         let _json = progress::json_mode_for_test();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("model.bin");
@@ -4256,6 +4273,10 @@ mode = "type"
     /// different call and used to download straight onto the final name.
     #[test]
     fn a_failed_human_download_leaves_neither_file() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("model.bin");
         let url = format!("file://{}", dir.path().join("no-such-source.bin").display());
@@ -4278,6 +4299,10 @@ mode = "type"
     #[test]
     #[ignore = "downloads a model from huggingface.co"]
     fn whisper_download_is_atomic_end_to_end() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
         let _json = progress::json_mode_for_test();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-tiny.en.bin");
