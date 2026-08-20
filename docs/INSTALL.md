@@ -177,7 +177,7 @@ Fedora's ydotool ships as a system service that needs extra setup. See [TROUBLES
 Apple Silicon only. Uses Microsoft ONNX Runtime so every engine is available, including Parakeet on the Neural Engine path.
 
 ```bash
-brew install --cask voxtype
+brew install --cask peteonrails/voxtype/voxtype
 ```
 
 Or download `voxtype-0.7.5-macOS-arm64.dmg` from the [latest release](https://github.com/peteonrails/voxtype/releases/latest). First launch opens a setup wizard that walks you through accessibility permissions, model download, and the FN-key hotkey.
