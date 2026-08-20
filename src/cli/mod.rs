@@ -14,7 +14,7 @@ mod root;
 mod setup;
 
 pub use commands::Commands;
-pub use config::{ConfigAction, ConfigSetKey};
+pub use config::ConfigAction;
 pub use info::InfoAction;
 pub use meeting::MeetingAction;
 pub use record::{OutputModeOverride, RecordAction};
@@ -42,3 +42,13 @@ pub const ENGINE_NAMES_CSV: &str =
 /// `match backend.as_str()` block; a test in `src/config/meeting.rs` pins
 /// this list against those arms.
 pub(crate) const DIARIZATION_BACKENDS: &[&str] = &["simple", "ml"];
+
+/// Values `voxtype setup --progress-format` accepts. `human` is curl's
+/// progress bar and the usual status lines; `json` emits one NDJSON event per
+/// update on stdout for a GUI to render.
+///
+/// Declared here rather than derived from
+/// `crate::setup::progress::ProgressFormat` because `build.rs` includes this
+/// module standalone for man-page generation and can't reach into the rest of
+/// the crate. A test in `src/setup/progress.rs` pins the two together.
+pub const PROGRESS_FORMATS: &[&str] = &["human", "json"];

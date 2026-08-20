@@ -29,7 +29,8 @@ pub enum Action {
     ForceQuit,
     /// Move /usr/bin/voxtype to the named variant via pkexec.
     SwitchVariant(Variant),
-    /// Run `voxtype setup model <model>` to download a missing model. The
+    /// Run `voxtype setup --download --model <model>` to download a missing
+    /// model. The
     /// engine name is included only for human-readable feedback.
     DownloadModel {
         engine: String,
@@ -402,7 +403,7 @@ impl App {
         self.refresh_inventory();
     }
 
-    /// Record the outcome of a `voxtype setup model` invocation onto the
+    /// Record the outcome of a model download invocation onto the
     /// same banner the variant-switch reuses, so the user sees it on the
     /// General screen the next time they focus it.
     pub fn record_download_attempt(
@@ -459,16 +460,18 @@ fn detect_missing_model() -> Option<MissingModel> {
     let cfg = config::load_config(None).ok()?;
     let dir = config::Config::models_dir();
     let (engine_name, model, setup_command) = match cfg.engine {
-        config::TranscriptionEngine::Whisper => {
-            ("whisper", cfg.whisper.model.clone(), "voxtype setup model")
-        }
+        config::TranscriptionEngine::Whisper => (
+            "whisper",
+            cfg.whisper.model.clone(),
+            "voxtype setup --download",
+        ),
         config::TranscriptionEngine::Parakeet => (
             "parakeet",
             cfg.parakeet
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Moonshine => (
             "moonshine",
@@ -476,7 +479,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::SenseVoice => (
             "sensevoice",
@@ -484,7 +487,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Paraformer => (
             "paraformer",
@@ -492,7 +495,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Dolphin => (
             "dolphin",
@@ -500,7 +503,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Omnilingual => (
             "omnilingual",
@@ -508,7 +511,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         // Cohere — checked but model layout differs by rc/0.7.0; skip the
         // disk probe rather than emit a false-positive missing warning.

@@ -1,5 +1,6 @@
 //! Top-level subcommand enum.
 
+use clap::builder::PossibleValuesParser;
 use clap::Subcommand;
 
 use super::{ConfigAction, InfoAction, MeetingAction, RecordAction, SetupAction};
@@ -75,6 +76,31 @@ pub enum Commands {
         /// Suppress only "Next steps" instructions
         #[arg(long)]
         no_post_install: bool,
+
+        /// Also switch the config to use the model, the way the interactive
+        /// picker does: sets `engine` and `<engine>.model`.
+        ///
+        /// Off by default. Downloading a model does not select it, so a GUI's
+        /// Download button and scripted pre-downloads can't change which
+        /// engine the daemon loads. Select a model explicitly with
+        /// `voxtype config set <engine>.model <NAME>`.
+        #[arg(long)]
+        activate: bool,
+
+        /// How download progress is reported: human (curl's progress bar) or
+        /// json (one NDJSON event per update on stdout, for a GUI to render).
+        ///
+        /// json implies --quiet for human status lines; stdout carries only
+        /// events. Failures still exit non-zero, with an "error" event
+        /// alongside.
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            default_value = "human",
+            value_parser = PossibleValuesParser::new(super::PROGRESS_FORMATS),
+            env = "VOXTYPE_PROGRESS_FORMAT",
+        )]
+        progress_format: String,
     },
 
     /// Show or modify configuration
