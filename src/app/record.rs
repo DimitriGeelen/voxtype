@@ -209,10 +209,8 @@ fn resolve_wait_target(config: &config::Config, explicit: Option<&str>) -> Optio
         }
     }
 
-    let pending = std::fs::read_to_string(
-        config::Config::runtime_dir().join("output_mode_override"),
-    )
-    .ok();
+    let pending =
+        std::fs::read_to_string(config::Config::runtime_dir().join("output_mode_override")).ok();
     if let Some(value) = pending.as_deref().map(str::trim) {
         if let Some(path) = value.strip_prefix("file:") {
             let path = path.trim();
