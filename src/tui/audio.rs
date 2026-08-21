@@ -417,8 +417,8 @@ fn guidance_for_field(state: &AudioState) -> Vec<Line<'_>> {
             Line::from(""),
             Line::from(
                 "Pauses Spotify, MPV, browsers, and other MPRIS players \
-                 while you record, then resumes them when transcription \
-                 finishes.",
+                 before recording begins, then resumes them as soon as \
+                 microphone capture stops.",
             ),
             Line::from(""),
             Line::from(Span::styled(
