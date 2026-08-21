@@ -78,6 +78,30 @@ pub enum RecordAction {
         /// Override output mode to paste (clipboard + Ctrl+V)
         #[arg(long, group = "output_mode")]
         paste: bool,
+
+        /// Block until the transcription is final instead of returning as soon
+        /// as the daemon has been signalled
+        ///
+        /// Requires the recording to be writing to a file (started with
+        /// --file, or output.mode = "file"). Exit code reports the outcome:
+        /// 0 transcribed, 3 nothing to transcribe, 4 timed out, 1 failed.
+        #[arg(long)]
+        wait: bool,
+
+        /// With --wait, print one JSON object describing the outcome
+        #[arg(long, requires = "wait")]
+        json: bool,
+
+        /// With --wait, give up after this many seconds
+        #[arg(long, value_name = "SECS", default_value_t = 120, requires = "wait")]
+        timeout: u64,
+
+        /// With --wait, the transcript path to wait on
+        ///
+        /// Defaults to the path the pending recording is already writing to,
+        /// so a caller that passed --file to `record start` need not repeat it.
+        #[arg(long, value_name = "FILE", requires = "wait")]
+        wait_file: Option<String>,
     },
     /// Toggle recording state
     Toggle {
@@ -171,6 +195,7 @@ impl RecordAction {
                 type_mode,
                 clipboard,
                 paste,
+                ..
             } => (*type_mode, *clipboard, *paste, None),
             RecordAction::Cancel => return None,
         };
@@ -342,6 +367,93 @@ mod tests {
                 assert_eq!(
                     action.output_mode_override(),
                     Some(OutputModeOverride::Type)
+                );
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn stop_defaults_to_not_waiting() {
+        let cli = Cli::parse_from(["voxtype", "record", "stop"]);
+        match cli.command {
+            Some(Commands::Record {
+                action:
+                    RecordAction::Stop {
+                        wait,
+                        json,
+                        wait_file,
+                        ..
+                    },
+            }) => {
+                assert!(!wait, "waiting must stay opt-in");
+                assert!(!json);
+                assert_eq!(wait_file, None);
+            }
+            _ => panic!("Expected Record Stop command"),
+        }
+    }
+
+    #[test]
+    fn stop_accepts_the_waiting_interface() {
+        let cli = Cli::parse_from([
+            "voxtype",
+            "record",
+            "stop",
+            "--wait",
+            "--json",
+            "--timeout",
+            "30",
+            "--wait-file",
+            "/tmp/dictation.txt",
+        ]);
+        match cli.command {
+            Some(Commands::Record {
+                action:
+                    RecordAction::Stop {
+                        wait,
+                        json,
+                        timeout,
+                        wait_file,
+                        ..
+                    },
+            }) => {
+                assert!(wait);
+                assert!(json);
+                assert_eq!(timeout, 30);
+                assert_eq!(wait_file.as_deref(), Some("/tmp/dictation.txt"));
+            }
+            _ => panic!("Expected Record Stop command"),
+        }
+    }
+
+    #[test]
+    fn waiting_flags_require_wait() {
+        // --json and friends are meaningless without --wait, and clap should
+        // say so rather than silently ignoring them.
+        for extra in [
+            vec!["--json"],
+            vec!["--timeout", "5"],
+            vec!["--wait-file", "/tmp/x"],
+        ] {
+            let mut argv = vec!["voxtype", "record", "stop"];
+            argv.extend(extra.iter().copied());
+            assert!(
+                Cli::try_parse_from(&argv).is_err(),
+                "{:?} should require --wait",
+                extra
+            );
+        }
+    }
+
+    #[test]
+    fn stop_wait_still_takes_an_output_mode() {
+        let cli = Cli::parse_from(["voxtype", "record", "stop", "--wait", "--paste"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(
+                    action.output_mode_override(),
+                    Some(OutputModeOverride::Paste)
                 );
             }
             _ => panic!("Expected Record command"),
