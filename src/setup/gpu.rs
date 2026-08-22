@@ -146,6 +146,20 @@ fn warn_if_provider_unloadable(binary_name: &str) {
     }
 }
 
+/// Human label for an ONNX variant's binary name.
+fn describe_onnx_variant(name: &str) -> &'static str {
+    match name {
+        "voxtype-onnx-avx2" | "voxtype-parakeet-avx2" => "ONNX CPU (AVX2)",
+        "voxtype-onnx-avx512" | "voxtype-parakeet-avx512" => "ONNX CPU (AVX-512)",
+        "voxtype-onnx-cuda-12" => "ONNX GPU (CUDA 12)",
+        "voxtype-onnx-cuda-13" => "ONNX GPU (CUDA 13)",
+        "voxtype-onnx-cuda" | "voxtype-parakeet-cuda" => "ONNX GPU (CUDA, unversioned)",
+        "voxtype-onnx-migraphx" => "ONNX GPU (MIGraphX)",
+        "voxtype-onnx-rocm" | "voxtype-parakeet-rocm" => "ONNX GPU (MIGraphX, legacy name)",
+        _ => "ONNX (unknown variant)",
+    }
+}
+
 /// Available backend variants
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Backend {
@@ -569,22 +583,44 @@ pub fn show_status() {
     if is_parakeet {
         // Detect active Parakeet backend from symlink
         if let Some(target) = detect_active_parakeet_backend() {
-            let display_name = match target.as_str() {
-                "voxtype-onnx-avx2" | "voxtype-parakeet-avx2" => "ONNX CPU (AVX2)",
-                "voxtype-onnx-avx512" | "voxtype-parakeet-avx512" => "ONNX CPU (AVX-512)",
-                "voxtype-onnx-cuda-12" => "ONNX GPU (CUDA 12)",
-                "voxtype-onnx-cuda-13" => "ONNX GPU (CUDA 13)",
-                "voxtype-onnx-cuda" | "voxtype-parakeet-cuda" => "ONNX GPU (CUDA, unversioned)",
-                "voxtype-onnx-migraphx" => "ONNX GPU (MIGraphX)",
-                "voxtype-onnx-rocm" | "voxtype-parakeet-rocm" => "ONNX GPU (MIGraphX, legacy name)",
-                _ => "ONNX (unknown variant)",
-            };
-            println!("Active backend: {}", display_name);
-            println!(
-                "  Binary: {}",
-                Path::new(VOXTYPE_LIB_DIR).join(&target).display()
-            );
-            warn_if_provider_unloadable(&target);
+            let display_name = describe_onnx_variant(&target);
+            // `target` comes from /usr/bin/voxtype, which describes the next
+            // process to start. Report what the daemon is actually executing
+            // when there is one, and say so when the two disagree; a variant
+            // switch does not take effect until a restart.
+            let daemon = crate::daemon_status::read_pid_if_alive();
+            let running_path = daemon.and_then(super::binary::running_binary_path);
+
+            match (&running_path, daemon) {
+                (Some(path), Some(pid)) => {
+                    let running_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    println!(
+                        "Active backend: {} (daemon pid {})",
+                        describe_onnx_variant(running_name),
+                        pid
+                    );
+                    println!("  Binary: {}", path.display());
+                    if running_name != target {
+                        println!();
+                        println!("  Next launch:  {}", display_name);
+                        println!("    {}", Path::new(VOXTYPE_LIB_DIR).join(&target).display());
+                        println!("  Restart voxtype to pick it up:");
+                        println!("    systemctl --user restart voxtype");
+                    }
+                    warn_if_provider_unloadable(running_name);
+                }
+                _ => {
+                    println!("Next launch: {} (no daemon running)", display_name);
+                    println!(
+                        "  Binary: {}",
+                        Path::new(VOXTYPE_LIB_DIR).join(&target).display()
+                    );
+                    warn_if_provider_unloadable(&target);
+                }
+            }
         } else {
             println!("Active backend: Parakeet (unknown variant)");
         }

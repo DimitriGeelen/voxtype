@@ -478,7 +478,16 @@ pub struct Inventory {
     pub install_kind: InstallKind,
     pub binary_path: PathBuf,
     pub package_lib_dir: Option<PathBuf>,
+    /// What `/usr/bin/voxtype` would launch next. Not necessarily what is
+    /// running: see `running_variant`.
     pub active_variant: Option<Variant>,
+    /// What the live daemon is actually executing, when one is running and
+    /// `/proc` is readable. Differs from `active_variant` after a variant
+    /// switch that has not been followed by a restart, or when something other
+    /// than `/usr/bin/voxtype` launched the daemon.
+    pub running_variant: Option<Variant>,
+    /// PID of the live daemon `running_variant` was read from.
+    pub daemon_pid: Option<i32>,
     /// Empty for `InstallKind::Source`.
     pub variants: Vec<VariantStatus>,
     pub cpu: Cpu,
@@ -638,6 +647,31 @@ pub fn detect_install_kind(binary_path: &Path) -> InstallKind {
 /// Read the `/usr/bin/voxtype` symlink to learn which packaged variant is
 /// active. Returns `None` for source installs, missing symlinks, or unknown
 /// targets.
+/// Path of the binary a live process is actually executing.
+///
+/// `None` when `/proc/<pid>/exe` cannot be read: another user's process, or a
+/// platform without `/proc`.
+pub fn running_binary_path(pid: i32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{}/exe", pid)).ok()
+}
+
+/// The packaged variant a live process is actually executing.
+///
+/// This is the honest answer to "which backend is in use". `active_variant`
+/// resolves `/usr/bin/voxtype`, which describes the *next* process to start:
+/// a daemon launched before a variant switch keeps running the old binary, and
+/// a systemd drop-in or a `/usr/local/bin` shadow can point somewhere else
+/// entirely. Reporting the symlink as "active" in either case states the
+/// opposite of what is running.
+///
+/// `None` when `/proc` is unreadable, or when the running binary is not a
+/// packaged variant (a source build, for instance).
+pub fn running_variant(pid: i32) -> Option<Variant> {
+    let path = running_binary_path(pid)?;
+    let name = path.file_name()?.to_str()?;
+    Variant::from_binary_name(name)
+}
+
 pub fn active_variant() -> Option<Variant> {
     // Handle both shapes /usr/bin/voxtype can take: a symlink (CPU
     // variants) or a wrapper script (GPU/ONNX variants whose binary
@@ -753,6 +787,8 @@ pub fn inventory() -> Inventory {
     let binary_path = current_binary_path();
     let install_kind = detect_install_kind(&binary_path);
     let active = active_variant();
+    let daemon_pid = crate::daemon_status::read_pid_if_alive();
+    let running = daemon_pid.and_then(running_variant);
 
     let variants = if install_kind == InstallKind::Package {
         Variant::ALL
@@ -783,6 +819,8 @@ pub fn inventory() -> Inventory {
         binary_path,
         package_lib_dir,
         active_variant: active,
+        running_variant: running,
+        daemon_pid,
         variants,
         cpu,
         gpus,
@@ -1144,5 +1182,40 @@ mod tests {
         assert_eq!(variant_subdir("voxtype-avx2"), None);
         assert_eq!(variant_subdir("voxtype-vulkan"), None);
         assert_eq!(variant_subdir(""), None);
+    }
+
+    #[test]
+    fn running_variant_reads_the_live_process_not_the_symlink() {
+        // Our own pid: /proc/self/exe is the test harness, which is not a
+        // packaged variant, so this must be None rather than falling back to
+        // whatever /usr/bin/voxtype happens to point at.
+        let me = std::process::id() as i32;
+        assert!(
+            running_binary_path(me).is_some(),
+            "/proc should be readable"
+        );
+        assert_eq!(running_variant(me), None);
+    }
+
+    #[test]
+    fn running_variant_is_none_for_a_dead_pid() {
+        // Reserved-but-unused pid space: no /proc entry, so no answer. The
+        // point is that it declines rather than guessing from the symlink.
+        assert_eq!(running_binary_path(-1), None);
+        assert_eq!(running_variant(-1), None);
+    }
+
+    #[test]
+    fn variant_names_round_trip_through_from_binary_name() {
+        // running_variant maps a /proc basename back to a Variant, so every
+        // variant's own binary name has to resolve.
+        for v in Variant::ALL {
+            assert_eq!(
+                Variant::from_binary_name(v.binary_name()),
+                Some(*v),
+                "{} did not round-trip",
+                v.binary_name()
+            );
+        }
     }
 }
