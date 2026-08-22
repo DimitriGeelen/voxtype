@@ -387,14 +387,46 @@ fn print_variants_text(inv: &setup::binary::Inventory) {
     }
 
     println!("Variants");
-    if let Some(active) = inv.active_variant {
-        println!(
-            "  Active:        {} ({})",
-            active.display(),
-            active.binary_name()
-        );
-    } else {
-        println!("  Active:        unknown (symlink missing or unrecognized)");
+    // Two different facts, previously conflated under "Active": what the
+    // daemon is executing right now, and what /usr/bin/voxtype would launch
+    // next. They diverge after a variant switch with no restart, or when
+    // something other than the symlink started the daemon.
+    match (inv.running_variant, inv.daemon_pid) {
+        (Some(running), Some(pid)) => {
+            println!(
+                "  Running:       {} ({})  — daemon pid {}",
+                running.display(),
+                running.binary_name(),
+                pid
+            );
+        }
+        (None, Some(pid)) => {
+            println!(
+                "  Running:       not a packaged variant  — daemon pid {}",
+                pid
+            );
+        }
+        _ => {
+            println!("  Running:       no daemon");
+        }
+    }
+
+    match inv.active_variant {
+        Some(next) => println!(
+            "  Next launch:   {} ({})",
+            next.display(),
+            next.binary_name()
+        ),
+        None => println!("  Next launch:   unknown (symlink missing or unrecognized)"),
+    }
+
+    if let (Some(running), Some(next)) = (inv.running_variant, inv.active_variant) {
+        if running != next {
+            println!();
+            println!("  The running daemon and the symlink disagree.");
+            println!("  Restart voxtype to pick up {}:", next.display());
+            println!("    systemctl --user restart voxtype");
+        }
     }
 
     println!();

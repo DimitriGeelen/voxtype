@@ -416,7 +416,7 @@ pub(crate) fn parse_nvidia_smi_apps(out: &str, pid: i32) -> Option<u64> {
 /// a variant switch (or from a systemd drop-in pointing elsewhere) keeps
 /// running the old binary.
 fn running_variant(pid: i32) -> (Option<Variant>, Option<String>) {
-    let exe = std::fs::read_link(format!("/proc/{}/exe", pid)).ok();
+    let exe = binary::running_binary_path(pid);
     match exe {
         Some(path) => {
             let name = path
