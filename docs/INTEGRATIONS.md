@@ -100,7 +100,7 @@ is only reachable by editing it, that is a missing flag — please open an issue
 
 ## Note for existing integrations
 
-`voxtype record stop --wait` requires Voxtype 0.7.6 or newer. Detect it with:
+`voxtype record stop --wait` requires Voxtype 1.0.0 or newer. Detect it with:
 
 ```sh
 voxtype record stop --help | grep -q -- --wait
