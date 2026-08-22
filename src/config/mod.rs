@@ -18,6 +18,7 @@ mod output;
 mod parse;
 mod profile;
 mod root;
+pub mod schema;
 mod status;
 mod text;
 mod vad;

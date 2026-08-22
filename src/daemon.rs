@@ -4112,7 +4112,32 @@ impl Daemon {
 
         tracing::info!("Daemon stopped");
 
-        Ok(())
+        // Exit without unwinding. Everything this daemon owns is already
+        // released above: profile override, state file, meeting state file,
+        // PID file and the OSD level socket. What remains between here and
+        // `main` returning is tokio teardown plus `_dl_fini` running the
+        // static destructors of ONNX Runtime, ROCm/MIGraphX and PipeWire, and
+        // that stretch is actively hostile:
+        //
+        //   * The ORT/MIGraphX stack releases a shared_ptr it has already
+        //     freed, decrementing a refcount inside a chunk parked in glibc's
+        //     448-byte bin. Nothing faults at the time. glibc aborts on the
+        //     next free landing in that size class, which at exit is
+        //     PipeWire's `pw_log_topic_unregister`. PipeWire is the detector,
+        //     not the cause; any 448-class free would do it. Each abort costs
+        //     a ~1.9 GB core dump, a desktop crash notification, and a unit
+        //     recorded as `Failed with result 'core-dump'`.
+        //   * ROCm's AsyncEventsLoop threads park indefinitely in KFD ioctls
+        //     and MIGraphX's embedded LLVM thread pool never joins, so the
+        //     same teardown can hang instead of aborting.
+        //
+        // ANY CLEANUP THIS DAEMON NEEDS MUST GO ABOVE THIS LINE. Code added
+        // below it will never run.
+        //
+        // `_exit` skips stdio flushing. Rust's stderr is unbuffered so the
+        // tracing output above is already out; anything that starts buffering
+        // daemon output has to flush before reaching here.
+        unsafe { libc::_exit(0) };
     }
 }
 
