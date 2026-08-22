@@ -41,7 +41,7 @@ object:
 | `status`  | Exit | Meaning |
 |-----------|------|---------|
 | `ok`      | 0    | `text` holds the transcript |
-| `empty`   | 3    | Nothing to transcribe — no speech detected, or the recording was too short |
+| `empty`   | 3    | Nothing to transcribe: no speech detected, or the recording was too short |
 | `timeout` | 4    | No outcome within `--timeout` seconds (default 120) |
 | `error`   | 1    | Transcription or the file write failed; see `message` |
 
@@ -61,7 +61,7 @@ waits out its own deadline and reports a timeout that never happened. `--wait`
 returns `empty` or `error` in milliseconds instead.
 
 Programs that must poll should watch for `<transcript>.done`, a JSON completion
-record written after — and only after — the transcript itself is complete. It is
+record written after the transcript itself is complete, and only then. It is
 written exactly once per file-mode recording and is consumed by `--wait`.
 
 ### Cancelling
@@ -90,17 +90,18 @@ Agent harnesses generally want the first three: the agent composes a message and
 decides for itself when to send it.
 
 A `[profiles.agent]` block with a `post_process_command` is a good place to
-normalise dictation before an agent sees it — stripping filler words, say.
+normalise dictation before an agent sees it, stripping filler words for instance.
 
 ## What Voxtype will not do for you
 
 Voxtype does not edit your configuration, and asks that you not edit its own:
 `~/.config/voxtype/config.toml` belongs to the user. If you need behaviour that
-is only reachable by editing it, that is a missing flag — please open an issue.
+is only reachable by editing it, that is a missing flag. Please open an issue.
 
 ## Note for existing integrations
 
-`voxtype record stop --wait` requires Voxtype 1.0.0 or newer. Detect it with:
+Not every Voxtype has `record stop --wait`. Probe for it rather than pinning a
+version, since the release lines do not carry it at the same time:
 
 ```sh
 voxtype record stop --help | grep -q -- --wait

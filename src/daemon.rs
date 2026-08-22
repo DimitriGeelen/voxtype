@@ -557,7 +557,7 @@ fn write_meeting_state_file(path: &PathBuf, state: &str, meeting_id: Option<&str
 /// file output has no way to learn that the recording finished, so it has to
 /// poll the transcript until its own deadline expires. When no speech is
 /// detected nothing is ever written and that deadline is the only thing that
-/// ends the wait — reported to the user as a timeout, which it is not. This
+/// ends the wait, reported to the user as a timeout, which it is not. This
 /// sidecar is the missing completion signal: exactly one is written per
 /// file-mode recording, and `voxtype record stop --wait` blocks on it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -2294,7 +2294,7 @@ impl Daemon {
 
                     // Consume the per-recording boolean overrides before any
                     // early return below. File output returns without building
-                    // an output chain, and these sentinels used to survive it —
+                    // an output chain, and these sentinels used to survive it:
                     // the next recording (typically the user's own hotkey, in
                     // type mode) then picked them up. Any client that passes
                     // --no-auto-submit with --file hit this on every dictation.
