@@ -16,8 +16,8 @@
 #   4. Run `makepkg --printsrcinfo > .SRCINFO`.
 
 pkgname=voxtype-bin-rc
-pkgver=0.7.3.rc1
-pkgrel=2
+pkgver=1.0.0.rc3
+pkgrel=1
 pkgdesc="Push-to-talk voice-to-text for Linux (pre-built binaries, release candidate channel)"
 arch=('x86_64')
 url="https://voxtype.io"
@@ -97,6 +97,12 @@ source=(
     "voxtype-${pkgname}-${pkgver}-osd.asc::${_github}/voxtype-${_upstream_ver}-linux-x86_64-osd.asc"
     "voxtype-${pkgname}-${pkgver}-osd-gtk4::${_github}/voxtype-${_upstream_ver}-linux-x86_64-osd-gtk4"
     "voxtype-${pkgname}-${pkgver}-osd-gtk4.asc::${_github}/voxtype-${_upstream_ver}-linux-x86_64-osd-gtk4.asc"
+    # Quickshell OSD launcher + the audio-bridge sidecar it exec's. The QML
+    # tree below is useless without these two (#488).
+    "voxtype-${pkgname}-${pkgver}-osd-quickshell::${_github}/voxtype-${_upstream_ver}-linux-x86_64-osd-quickshell"
+    "voxtype-${pkgname}-${pkgver}-osd-quickshell.asc::${_github}/voxtype-${_upstream_ver}-linux-x86_64-osd-quickshell.asc"
+    "voxtype-${pkgname}-${pkgver}-audio-bridge::${_github}/voxtype-${_upstream_ver}-linux-x86_64-audio-bridge"
+    "voxtype-${pkgname}-${pkgver}-audio-bridge.asc::${_github}/voxtype-${_upstream_ver}-linux-x86_64-audio-bridge.asc"
     # Config and support files
     "config-${pkgname}-${pkgver}.toml::${_raw}/config/default.toml"
     "voxtype-${pkgname}-${pkgver}.service::${_raw}/packaging/systemd/voxtype.service"
@@ -130,63 +136,57 @@ source=(
 #   cd releases/${_upstream_ver} && sha256sum voxtype-${_upstream_ver}-linux-x86_64-* | sort
 # Initial sums are SKIP placeholders so makepkg --printsrcinfo runs cleanly
 # on a freshly-tagged RC where the artifacts may not be uploaded yet.
-sha256sums=(
-    # Whisper binaries
-    'SKIP'  # voxtype-avx2
-    'SKIP'  # voxtype-avx2.asc
-    'SKIP'  # voxtype-avx512
-    'SKIP'  # voxtype-avx512.asc
-    'SKIP'  # voxtype-vulkan
-    'SKIP'  # voxtype-vulkan.asc
-    # ONNX CPU binaries
-    'SKIP'  # voxtype-onnx-avx2
-    'SKIP'  # voxtype-onnx-avx2.asc
-    'SKIP'  # voxtype-onnx-avx512
-    'SKIP'  # voxtype-onnx-avx512.asc
-    # ONNX CUDA 12
-    'SKIP'  # voxtype-onnx-cuda-12
-    'SKIP'  # voxtype-onnx-cuda-12.asc
-    'SKIP'  # voxtype-onnx-cuda-12.libonnxruntime_providers_cuda.so
-    'SKIP'  # voxtype-onnx-cuda-12.libonnxruntime_providers_shared.so
-    # ONNX CUDA 13
-    'SKIP'  # voxtype-onnx-cuda-13
-    'SKIP'  # voxtype-onnx-cuda-13.asc
-    'SKIP'  # voxtype-onnx-cuda-13.libonnxruntime_providers_cuda.so
-    'SKIP'  # voxtype-onnx-cuda-13.libonnxruntime_providers_shared.so
-    'SKIP'  # voxtype-onnx-cuda-13.libonnxruntime.so.1.24.4
-    # ONNX MIGraphX
-    'SKIP'  # voxtype-onnx-migraphx
-    'SKIP'  # voxtype-onnx-migraphx.asc
-    'SKIP'  # voxtype-onnx-migraphx.libonnxruntime_providers_migraphx.so
-    'SKIP'  # voxtype-onnx-migraphx.libonnxruntime_providers_shared.so
-    # OSD launcher + GTK4 frontend
-    'SKIP'  # voxtype-osd
-    'SKIP'  # voxtype-osd.asc
-    'SKIP'  # voxtype-osd-gtk4
-    'SKIP'  # voxtype-osd-gtk4.asc
-    # Config and support files
-    'SKIP'  # config.toml
-    'SKIP'  # voxtype.service
-    'SKIP'  # voxtype.bash
-    'SKIP'  # voxtype.zsh
-    'SKIP'  # voxtype.fish
-    'SKIP'  # LICENSE
-    'SKIP'  # README.md
-    'SKIP'  # voxtype-configure.desktop
-    'SKIP'  # voxtype-configure-launcher
-    # Quickshell QML tree
-    'SKIP'  # quickshell/shell.qml
-    'SKIP'  # quickshell/OsdSurface.qml
-    'SKIP'  # quickshell/EnginePicker.qml
-    'SKIP'  # quickshell/MeetingControls.qml
-    'SKIP'  # quickshell/README.md
-    'SKIP'  # quickshell/voxtype-shared/Theme.qml
-    'SKIP'  # quickshell/voxtype-shared/StateReader.qml
-    'SKIP'  # quickshell/voxtype-shared/AudioBridge.qml
-    'SKIP'  # quickshell/voxtype-shared/StyleLoader.qml
-    'SKIP'  # quickshell/voxtype-shared/RecipeRenderer.qml
-    'SKIP'  # quickshell/voxtype-shared/qmldir
-)
+sha256sums=('26ff86c86eb0c1f130d3fcdfa02e7b856819045fa0fc5e4a2e5405c86862e576'
+            'SKIP'
+            'b3ba4a7dcbc70e1908531f8b9d636348dc594db54411617c2675af247d5ecfc7'
+            'SKIP'
+            '8cf5ff17d2e3aeaf0427826240e173f7d47d4e6e7ca08ae7d84dabf41b71402e'
+            'SKIP'
+            'ee776be962343291d9a52a5ef85562293aea4a6ab0d2a1035dbc89b414c3cb35'
+            'SKIP'
+            '63e809cce5436f0d54994ec82a6dedf06417d4ab4dbcd4c0ca53c01bd68bffd2'
+            'SKIP'
+            '1e0c9ded42b80a4c2862310697c6888109983d7b9a970e9410bd159c7fb3e675'
+            'SKIP'
+            'a8584727d51ba646ac63fc991c2f36ad6cd5b8cc8b1141896e46938700b888d0'
+            '1b028afc079628d76a28d7eb09700a4baead4a27f9634ba82c35398486134114'
+            '3d8efabefefa8698f95817c02329c08a5b87104b539ce6fecbe80640c7551fee'
+            'SKIP'
+            'b6cb7744d0efd2faced5c83ead374c13e7f2630b5a249ffaf393cdb1e092c92b'
+            'c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772'
+            '1aacefdf0b4afa145d410b2381bbc3db3d978c485fb182c42a2b0b09f91f5310'
+            '57038435016d5465ac0827a719cd0267861abfd77d37393c61b7604ac50d1f34'
+            'SKIP'
+            'ddd67e6193ade819ee21f1706d1b03b9151f1d2d2843701e2d19d8b183631707'
+            '17f7cf47ad0d7b5ac895ae588fd62c7f85a13842588161b6a24c7d480f062be4'
+            'c6a85b621bc4a5f7404c4b418d49eef900f69d64713c63b50978b2ef205cdd26'
+            'SKIP'
+            '103ca0e20f20275e46e8dbcbdbdeace94b0b59da8911dd2f4a1b6d4ad0a8037f'
+            'SKIP'
+            'fe6a8a62d5b3a3edfb0d9497eb1e4cf4cb51edfae8124acc6a6ca3ac2de14cea'
+            'SKIP'
+            '75a31536ebce17d3b3adf7ba45d10549d31b6f826487cd4989383591f5bf5d19'
+            'SKIP'
+            '0b91367d2088e8850a37b47a0cba0bd9107695fc81a00ab1933465ada2a16a2f'
+            '531c3658e229619e56bb01659fb81f401767b85e1d6e2acd1ac67ee3414a168c'
+            '65c95805d9b03ccc2fadb9d63a03ab79974b00091df8457ee8ef290ec6bd5b12'
+            'e5e63b3c7f48238cf719e4f2ef90c1f9c5c7e8cd25eaebc9f78bdd34b24b6605'
+            'f720ddd24ee97c105b448323899c36bca7c63d00c2d42c4a3da70c3d157dccbb'
+            '31123c45b4ff9cb5fd9e01083350fea6ccaf14969013fd48e4c95fdf89e6eb4b'
+            '11bf83d8cb2bfab0e978707fa80475d97be79723a6dc71adc3c357829ba9f347'
+            '32144a4a5210092b0aa909f6de7a43ebe8bbf82fa3dfb1f3519787512fdf8e4b'
+            '044b1f7b52cc610ce57ba624111d882029b0ce4bc3e2c2c360f96d07f69e0e85'
+            '3f711c7cfca80773960e98a47361611497e584e56657052d675241daae84947e'
+            '6e8b8aae6b64809ed5ca504a3171a4ddeadc91b1ed96eacbf67bbf056b2ffbdd'
+            '4d6eef505ec161080ca92ae6a355ca00dcc7bb05d5b190534a1851fcbb726e55'
+            '54271a8f0e4b52f40505f32801f4c78399ac356ed1e80906ca8a068ecb7ee734'
+            'ac6d08fe9c7f92a6935a05c23f7c55ab717f2d06593808aa2077c25c5d313122'
+            'aaa011682b92d8e25863a9ea34a469b897bac15ad939292d8144b012fa05b209'
+            'd7d2fb11df25c3f30127a0d7c72693cdfb649b357888f4abd5b3fbbb2e7ce655'
+            '2ad530f92f13fc7f1100e6f6c9910878c35d911e91dc60feb902c2542b619230'
+            '45180488129f16a0568c217c743ce7e45831acb0cb287346d6da5b2fc097717b'
+            'd5e9a86946dc8dc2afabdcd00d79d973181e51b2e5e8aea2772960aaf1ff2283'
+            '41b894baa1487e47db5f9ec4baeea9c02b6a76d3c8198b4700a88e2cb7ec0b62')
 
 package() {
     local src="$srcdir/voxtype-${pkgname}-${pkgver}"
@@ -253,8 +253,14 @@ package() {
     # OSD launcher + GTK4 frontend.
     install -Dm755 "${src}-osd" "$pkgdir/usr/lib/voxtype/voxtype-osd"
     install -Dm755 "${src}-osd-gtk4" "$pkgdir/usr/lib/voxtype/voxtype-osd-gtk4"
+    install -Dm755 "${src}-osd-quickshell" "$pkgdir/usr/lib/voxtype/voxtype-osd-quickshell"
     install -d "$pkgdir/usr/bin"
     ln -sf /usr/lib/voxtype/voxtype-osd "$pkgdir/usr/bin/voxtype-osd"
+
+    # voxtype-audio-bridge: NDJSON sidecar that streams audio levels over a
+    # UNIX socket to the Quickshell OSD. Lives in /usr/bin because the
+    # quickshell launcher exec's it directly by basename.
+    install -Dm755 "${src}-audio-bridge" "$pkgdir/usr/bin/voxtype-audio-bridge"
 
     # Desktop entry for the TUI configure command.
     install -Dm755 "$srcdir/voxtype-configure-launcher-${pkgname}-${pkgver}" \
