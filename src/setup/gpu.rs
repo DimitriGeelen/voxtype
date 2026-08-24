@@ -255,6 +255,28 @@ fn is_tiered_mode() -> bool {
 }
 
 /// Detect which backend is currently active
+/// Map a binary's file name back to its `Backend`.
+///
+/// The forward direction lives in `Backend::binary_name`. This is the reverse,
+/// used to name the variant a running process is executing.
+fn backend_from_binary_name(name: &str) -> Option<Backend> {
+    match name {
+        "voxtype-cpu" => Some(Backend::Cpu),
+        "voxtype-native" => Some(Backend::Native),
+        "voxtype-avx2" => Some(Backend::Avx2),
+        "voxtype-avx512" => Some(Backend::Avx512),
+        "voxtype-vulkan" => Some(Backend::Vulkan),
+        _ => None,
+    }
+}
+
+/// The Whisper backend the live daemon is actually executing.
+fn running_whisper_backend(pid: i32) -> Option<(Backend, std::path::PathBuf)> {
+    let path = super::binary::running_binary_path(pid)?;
+    let name = path.file_name()?.to_str()?;
+    backend_from_binary_name(name).map(|b| (b, path))
+}
+
 pub fn detect_current_backend() -> Option<Backend> {
     let active_bin = get_active_binary_path();
     // Check if the voxtype binary is a symlink
@@ -625,23 +647,58 @@ pub fn show_status() {
             println!("Active backend: Parakeet (unknown variant)");
         }
     } else {
-        match detect_current_backend() {
-            Some(backend) => {
-                println!("Active backend: {}", backend.display_name());
-                if backend == Backend::Vulkan || (tiered && backend != Backend::Cpu) {
-                    println!(
-                        "  Binary: {}",
-                        Path::new(VOXTYPE_LIB_DIR)
-                            .join(backend.binary_name())
-                            .display()
-                    );
-                } else {
-                    println!("  Binary: {}", active_bin);
+        // Same split as the ONNX branch above: what the daemon is running
+        // now, and separately what /usr/bin/voxtype would launch next. The
+        // symlink alone was reported as "active", which is wrong whenever a
+        // variant switch has not been followed by a restart.
+        let next = detect_current_backend();
+        let daemon = crate::daemon_status::read_pid_if_alive();
+
+        match daemon.and_then(running_whisper_backend) {
+            Some((running, path)) => {
+                println!(
+                    "Active backend: {} (daemon pid {})",
+                    running.display_name(),
+                    daemon.unwrap_or(0)
+                );
+                println!("  Binary: {}", path.display());
+
+                if let Some(next) = next {
+                    if next != running {
+                        println!();
+                        println!("  Next launch:  {}", next.display_name());
+                        println!(
+                            "    {}",
+                            Path::new(VOXTYPE_LIB_DIR)
+                                .join(next.binary_name())
+                                .display()
+                        );
+                        println!("  Restart voxtype to pick it up:");
+                        println!("    systemctl --user restart voxtype");
+                    }
                 }
             }
-            None => {
-                println!("Active backend: Unknown (symlink may be broken)");
-            }
+            None => match next {
+                Some(backend) => {
+                    println!(
+                        "Next launch: {} (no daemon running)",
+                        backend.display_name()
+                    );
+                    if backend == Backend::Vulkan || (tiered && backend != Backend::Cpu) {
+                        println!(
+                            "  Binary: {}",
+                            Path::new(VOXTYPE_LIB_DIR)
+                                .join(backend.binary_name())
+                                .display()
+                        );
+                    } else {
+                        println!("  Binary: {}", active_bin);
+                    }
+                }
+                None => {
+                    println!("Active backend: Unknown (symlink may be broken)");
+                }
+            },
         }
     }
 
@@ -1109,6 +1166,36 @@ fn switch_backend_tiered_parakeet(binary_name: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_names_round_trip() {
+        // running_whisper_backend maps a /proc basename back to a Backend, so
+        // every backend's own binary name has to resolve. A miss here is what
+        // made setup gpu --status fall back to reading the symlink.
+        for b in [
+            Backend::Cpu,
+            Backend::Native,
+            Backend::Avx2,
+            Backend::Avx512,
+            Backend::Vulkan,
+        ] {
+            assert_eq!(
+                backend_from_binary_name(b.binary_name()),
+                Some(b),
+                "{} did not round-trip",
+                b.binary_name()
+            );
+        }
+    }
+
+    #[test]
+    fn backend_from_binary_name_rejects_non_variants() {
+        // A source build or an ONNX variant is not a Whisper backend; the
+        // caller must get None rather than a wrong label.
+        assert_eq!(backend_from_binary_name("voxtype"), None);
+        assert_eq!(backend_from_binary_name("voxtype-onnx-migraphx"), None);
+        assert_eq!(backend_from_binary_name(""), None);
+    }
 
     #[test]
     fn parse_ldd_missing_finds_unresolved_deps() {
