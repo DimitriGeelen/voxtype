@@ -98,6 +98,15 @@ pub struct App {
     /// content pointing the user at the recovery path. Computed at load
     /// time and on `refresh_inventory()`. See #450.
     pub variant_mismatch: Option<VariantMismatch>,
+    /// Modification time of config.toml as of the last moment the daemon
+    /// was known to be in sync with it: TUI startup, or the most recent
+    /// `restart_voxtype_daemon` call. Compared on quit — a newer mtime
+    /// means a save landed that the running daemon has not loaded, so the
+    /// TUI restarts it on the way out. Without this, a config-only change
+    /// (e.g. switching engine on a binary that supports both) saved and
+    /// quit cleanly but never took effect, while variant switches and
+    /// model downloads restarted immediately.
+    pub config_synced_mtime: Option<std::time::SystemTime>,
     /// Lazily loaded Hotkey section state. None until the user opens Hotkey
     /// for the first time (or load fails).
     pub hotkey: Option<HotkeyState>,
@@ -183,6 +192,7 @@ impl App {
             quit_pending: false,
             missing_model: detect_missing_model(),
             variant_mismatch,
+            config_synced_mtime: config_file_mtime(),
             hotkey: None,
             audio: None,
             engine: None,
@@ -542,9 +552,55 @@ fn detect_missing_model() -> Option<MissingModel> {
 }
 use crate::daemon_status::is_daemon_running;
 
+/// Modification time of the config file the TUI edits (the same
+/// `Config::default_path()` every section's `ConfigEditor::load()` writes
+/// to). `None` when the path can't be resolved or the file doesn't exist.
+pub fn config_file_mtime() -> Option<std::time::SystemTime> {
+    let path = crate::config::Config::default_path()?;
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+/// Should quitting the TUI restart the daemon?
+///
+/// Yes exactly when a daemon is alive and the config file changed after the
+/// last known daemon (re)start — the running process is stale with respect
+/// to what the user saved. A stopped daemon needs no restart (the next start
+/// reads the new config, and `systemctl restart` on a stopped service would
+/// start it, which the user didn't ask for). `current` being `None` means
+/// the config file doesn't exist, so there is nothing new to load.
+pub fn should_restart_on_quit(
+    daemon_running: bool,
+    synced: Option<std::time::SystemTime>,
+    current: Option<std::time::SystemTime>,
+) -> bool {
+    daemon_running && current.is_some() && current != synced
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: an engine change saved through the TUI never took effect
+    /// because quitting didn't restart the daemon. Quit must restart exactly
+    /// when a daemon is alive and the config was saved after the daemon's
+    /// last known (re)start.
+    #[test]
+    fn quit_restarts_only_a_running_daemon_with_a_newer_config() {
+        use std::time::{Duration, SystemTime};
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let t1 = t0 + Duration::from_secs(60);
+
+        // Saved after startup, daemon running: restart.
+        assert!(should_restart_on_quit(true, Some(t0), Some(t1)));
+        // Config file created during the session (didn't exist at startup).
+        assert!(should_restart_on_quit(true, None, Some(t1)));
+        // Untouched config: no restart.
+        assert!(!should_restart_on_quit(true, Some(t0), Some(t0)));
+        // Daemon not running: never restart (it would *start* the service).
+        assert!(!should_restart_on_quit(false, Some(t0), Some(t1)));
+        // No config file at all: nothing new for a daemon to load.
+        assert!(!should_restart_on_quit(true, Some(t0), None));
+    }
 
     #[test]
     fn variant_at_finds_known_pairs() {
