@@ -22,10 +22,14 @@
 //!    Proof of GPU use when present. Absence proves nothing: a daemon with
 //!    `on_demand_loading` holds no VRAM while idle.
 //! 3. **The daemon's journal**, scoped to its PID. Distinguishes lines that
-//!    prove acceleration (`use gpu = 1`, `ggml_vulkan: Found 1 Vulkan
-//!    devices`) from lines that only state intent (`Configuring MIGraphX
-//!    execution provider`, `registering execution providers ["CUDA"]`) —
-//!    intent never decides `gpu`.
+//!    prove acceleration (`ggml_vulkan: Found 1 Vulkan devices`,
+//!    `whisper_backend_init_gpu: using Vulkan0 backend`) from lines that only
+//!    state intent (`use gpu = 1`, `Configuring MIGraphX execution provider`,
+//!    `registering execution providers ["CUDA"]`) — intent never decides
+//!    `gpu`. whisper.cpp prints `use gpu` from the context params before it
+//!    opens a device, so it records what was asked for; the answer comes
+//!    later from `whisper_backend_init_gpu`, which says `no GPU found` and
+//!    falls back to CPU when the request cannot be met.
 //! 4. **The variant of the binary behind the PID**, read from
 //!    `/proc/<pid>/exe` rather than the `/usr/bin/voxtype` symlink, since the
 //!    symlink describes what a *new* process would launch. A CPU-only variant
@@ -253,12 +257,33 @@ pub(crate) fn classify_line(line: &str) -> Option<(Signal, Option<&'static str>)
         .collect::<Vec<_>>()
         .join(" ");
 
-    // whisper.cpp / ggml. `use gpu` is printed on every context init.
+    // whisper.cpp / ggml. `use gpu = 1` is the requested setting, printed
+    // from the context params before any device is opened, so it is intent.
+    // `use gpu = 0` is different: the GPU was never even asked for, which
+    // settles the question on its own.
     if l.contains("use gpu = 1") {
-        return Some((Signal::Positive, None));
+        return Some((Signal::Intent, None));
     }
     if l.contains("use gpu = 0") {
         return Some((Signal::Negative, None));
+    }
+    // whisper_backend_init_gpu reports the outcome of that request. Its
+    // per-device enumeration line (`device 0: CPU (type: 0)`) is neither
+    // proof nor disproof and deliberately falls through.
+    if l.contains("whisper_backend_init_gpu:") {
+        if l.contains("no gpu found") {
+            return Some((Signal::Negative, None));
+        }
+        if l.contains("found gpu device") || (l.contains("using") && l.contains("backend")) {
+            let backend = if l.contains("vulkan") {
+                Some("vulkan")
+            } else if l.contains("cuda") {
+                Some("cuda")
+            } else {
+                None
+            };
+            return Some((Signal::Positive, backend));
+        }
     }
     if l.contains("ggml_vulkan") && l.contains("found 0") {
         return Some((Signal::Negative, Some("vulkan")));
@@ -304,7 +329,7 @@ pub(crate) fn classify_line(line: &str) -> Option<(Signal, Option<&'static str>)
 /// Journal patterns worth pulling out of a daemon's log. Passed to
 /// `journalctl -g` so the filtering happens there rather than by streaming
 /// every line of a weeks-old daemon's journal into this process.
-const JOURNAL_PATTERN: &str = "use gpu|ggml_vulkan|ggml_cuda|execution provider|onnxruntime|falling back to cpu|no cuda devices";
+const JOURNAL_PATTERN: &str = "use gpu|whisper_backend_init_gpu|ggml_vulkan|ggml_cuda|execution provider|onnxruntime|falling back to cpu|no cuda devices";
 
 /// Read the GPU-relevant lines this PID logged.
 fn scan_journal(pid: i32) -> Signals {
@@ -627,7 +652,7 @@ mod tests {
     fn whisper_gpu_markers_are_read_both_ways() {
         assert_eq!(
             classify_line("whisper_init_with_params_no_state: use gpu    = 1"),
-            Some((Signal::Positive, None))
+            Some((Signal::Intent, None))
         );
         assert_eq!(
             classify_line("whisper_init_with_params_no_state: use gpu    = 0"),
@@ -645,6 +670,63 @@ mod tests {
             classify_line("ggml_cuda_init: found 1 CUDA devices"),
             Some((Signal::Positive, Some("cuda")))
         );
+    }
+
+    /// whisper.cpp asks for a GPU and then reports whether it got one. The
+    /// request line and the answer line are two different facts.
+    #[test]
+    fn whisper_reports_the_outcome_not_just_the_request() {
+        assert_eq!(
+            classify_line("whisper_backend_init_gpu: no GPU found"),
+            Some((Signal::Negative, None))
+        );
+        assert_eq!(
+            classify_line(
+                "whisper_backend_init_gpu: found GPU device 0: Vulkan0 (type: 1, cnt: 1)"
+            ),
+            Some((Signal::Positive, Some("vulkan")))
+        );
+        assert_eq!(
+            classify_line("whisper_backend_init_gpu: using CUDA0 backend"),
+            Some((Signal::Positive, Some("cuda")))
+        );
+        // Device enumeration lists whatever ggml can see, CPU included. It
+        // decides nothing on its own.
+        assert_eq!(
+            classify_line("whisper_backend_init_gpu: device 0: CPU (type: 0)"),
+            None
+        );
+    }
+
+    /// The Vulkan build on a machine with no usable Vulkan device: the daemon
+    /// asks for the GPU, whisper finds none, transcription runs on the CPU.
+    /// Reported as `gpu` before the request/outcome split.
+    #[test]
+    fn requested_gpu_that_never_materialised_is_a_fallback() {
+        let signals = signals_from(&[
+            "whisper_init_with_params_no_state: use gpu    = 1",
+            "whisper_backend_init_gpu: device 0: CPU (type: 0)",
+            "whisper_backend_init_gpu: no GPU found",
+        ]);
+        let (state, backend) = decide(Some(Variant::WhisperVulkan), &signals, None);
+        assert_eq!(
+            state,
+            AccelState::CpuFallback,
+            "a GPU that was asked for but never found is a fallback, not acceleration"
+        );
+        assert_eq!(backend, Some("vulkan"));
+    }
+
+    /// The same build where the device is real.
+    #[test]
+    fn requested_gpu_that_materialised_is_acceleration() {
+        let signals = signals_from(&[
+            "whisper_init_with_params_no_state: use gpu    = 1",
+            "whisper_backend_init_gpu: found GPU device 0: Vulkan0 (type: 1, cnt: 1)",
+            "whisper_backend_init_gpu: using Vulkan0 backend",
+        ]);
+        let (state, _) = decide(Some(Variant::WhisperVulkan), &signals, None);
+        assert_eq!(state, AccelState::Gpu);
     }
 
     /// The line the 0.7.5 daemon on an AMD box logs. It is printed *before*
