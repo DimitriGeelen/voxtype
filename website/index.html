@@ -959,19 +959,19 @@ sudo dnf install wtype wl-clipboard libnotify pipewire-alsa playerctl</code></pr
                 </div>
 
                 <div id="macos" class="tab-content">
-                    <p class="install-note">Apple Silicon (arm64) only. Uses Microsoft ONNX Runtime so all engines are available, including Parakeet on the Neural Engine path.</p>
+                    <p class="install-note">Universal binary: Apple Silicon and Intel. Uses Microsoft ONNX Runtime so all engines are available, including Parakeet on the Neural Engine path.</p>
                     <div class="code-block">
                         <div class="code-header">
                             <span>Install via Homebrew</span>
-                            <button class="copy-btn" data-copy="brew install --cask voxtype">Copy</button>
+                            <button class="copy-btn" data-copy="brew install --cask peteonrails/voxtype/voxtype">Copy</button>
                         </div>
-                        <pre><code><span class="comment"># Install the signed app bundle</span>
-brew install --cask voxtype
+                        <pre><code><span class="comment"># Voxtype is not in Homebrew core yet, so install from the tap</span>
+brew install --cask peteonrails/voxtype/voxtype
 
-<span class="comment"># First launch opens a setup wizard that walks you through</span>
-<span class="comment"># Accessibility permissions, model download, and the FN-key hotkey.</span></code></pre>
+<span class="comment"># Pick a model, set the hotkey, grant permissions</span>
+voxtype configure</code></pre>
                     </div>
-                    <p class="install-note" style="margin-top: 1rem;">Or download <code>voxtype-0.7.5-macOS-arm64.dmg</code> from the <a href="https://github.com/peteonrails/voxtype/releases/latest">latest release</a>.</p>
+                    <p class="install-note" style="margin-top: 1rem;">This installs a <code>voxtype</code> command-line tool, not an app bundle. The build is not signed or notarized yet, so macOS asks you to approve it the first time. Or download <code>voxtype-0.7.5-macos-universal.dmg</code> from the <a href="https://github.com/peteonrails/voxtype/releases/latest">latest release</a>.</p>
                 </div>
 
                 <div id="nixos" class="tab-content">

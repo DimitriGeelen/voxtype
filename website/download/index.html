@@ -515,9 +515,9 @@
                     </svg>
                     macOS
                 </h3>
-                <p>Install via Homebrew Cask. Apple Silicon and Intel both supported. The cask runs <code>voxtype setup</code> on first launch to download the model and request microphone permissions.</p>
+                <p>Install via Homebrew Cask. Apple Silicon and Intel both supported. The cask installs a <code>voxtype</code> command-line tool. Run <code>voxtype configure</code> afterwards to pick a model and grant microphone and Input Monitoring permissions.</p>
                 <div class="code-block">
-                    <code><span class="comment"># Add the tap</span><br/>brew tap peteonrails/voxtype<br/><br/><span class="comment"># Install</span><br/>brew install --cask voxtype<br/><br/><span class="comment"># Launch the menubar app</span><br/>open -a Voxtype</code>
+                    <code><span class="comment"># Add the tap</span><br/>brew tap peteonrails/voxtype<br/><br/><span class="comment"># Install</span><br/>brew install --cask voxtype<br/><br/><span class="comment"># Pick a model, set the hotkey, grant permissions</span><br/>voxtype configure</code>
                 </div>
             </div>
         </div>
