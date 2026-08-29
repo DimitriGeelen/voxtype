@@ -16,7 +16,7 @@
 #   4. Run `makepkg --printsrcinfo > .SRCINFO`.
 
 pkgname=voxtype-bin-rc
-pkgver=1.0.0.rc3
+pkgver=1.0.0.rc4
 pkgrel=1
 pkgdesc="Push-to-talk voice-to-text for Linux (pre-built binaries, release candidate channel)"
 arch=('x86_64')
@@ -50,7 +50,16 @@ provides=('voxtype')
 conflicts=('voxtype' 'voxtype-bin')
 backup=('etc/voxtype/config.toml')
 install=voxtype-bin-rc.install
-validpgpkeys=('E79F5BAF8CD51A806AA27DBB7DA2709247D75BC6')  # Peter Jackson <pete@peteonrails.com>
+validpgpkeys=(
+    # Peter Jackson's offline maintainer primary. Signed binary .asc files
+    # through v0.7.4 and cross-signed the CI primary below.
+    'E79F5BAF8CD51A806AA27DBB7DA2709247D75BC6'
+    # Voxtype CI release signing primary (cross-signed by E79F5BAF...).
+    # Signs every release asset from v0.7.5 on, including this RC, so it
+    # has to be listed or makepkg rejects the sources on any machine that
+    # does not already trust it. Auto-fetchable by fingerprint.
+    '9CCF7915B750CAE8B095ED1AA3FC9F33FD209279'
+)
 
 # Reverse the rc-pkgver mangling so GitHub URLs use the real tag name.
 # pkgver=0.7.3.rc1 -> _upstream_ver=0.7.3-rc1 -> tag v0.7.3-rc1.
@@ -136,36 +145,36 @@ source=(
 #   cd releases/${_upstream_ver} && sha256sum voxtype-${_upstream_ver}-linux-x86_64-* | sort
 # Initial sums are SKIP placeholders so makepkg --printsrcinfo runs cleanly
 # on a freshly-tagged RC where the artifacts may not be uploaded yet.
-sha256sums=('26ff86c86eb0c1f130d3fcdfa02e7b856819045fa0fc5e4a2e5405c86862e576'
+sha256sums=('1a87224d07601821792f96ba9751a8e46af9830ef74e802c35620acc02522d0e'
             'SKIP'
-            'b3ba4a7dcbc70e1908531f8b9d636348dc594db54411617c2675af247d5ecfc7'
+            '64df9b8c48569b831515535e2629d8fb734b22eafa51ddbd0bcecdb58b318cc5'
             'SKIP'
-            '8cf5ff17d2e3aeaf0427826240e173f7d47d4e6e7ca08ae7d84dabf41b71402e'
+            'fc593e45313e941d5095cbb197f31035d1858904de1bcfe503df920f6f7cbea5'
             'SKIP'
-            'ee776be962343291d9a52a5ef85562293aea4a6ab0d2a1035dbc89b414c3cb35'
+            '87378d5935f56d1a3d38110cf2fd650eba22a72cf736ba080f7053611e3054e8'
             'SKIP'
-            '63e809cce5436f0d54994ec82a6dedf06417d4ab4dbcd4c0ca53c01bd68bffd2'
+            '0c45134c651217a31f3c6e7e1a237b53f5df95e21fe87b0bf1713c762ba573bb'
             'SKIP'
-            '1e0c9ded42b80a4c2862310697c6888109983d7b9a970e9410bd159c7fb3e675'
+            '424771315a062adc69408c47ad5dcce1f2dbd743537d44db896df6ff7b64bac0'
             'SKIP'
             'a8584727d51ba646ac63fc991c2f36ad6cd5b8cc8b1141896e46938700b888d0'
             '1b028afc079628d76a28d7eb09700a4baead4a27f9634ba82c35398486134114'
-            '3d8efabefefa8698f95817c02329c08a5b87104b539ce6fecbe80640c7551fee'
+            'eb48938ccc752dc5f81aeacd0322a6d216b4bd9fca064816f26569e8e1a46a59'
             'SKIP'
             'b6cb7744d0efd2faced5c83ead374c13e7f2630b5a249ffaf393cdb1e092c92b'
             'c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772'
             '1aacefdf0b4afa145d410b2381bbc3db3d978c485fb182c42a2b0b09f91f5310'
-            '57038435016d5465ac0827a719cd0267861abfd77d37393c61b7604ac50d1f34'
+            'addde7270458cc9e0b7676d80da60e4cf3d7b5259039d288c08c50d2671b2308'
             'SKIP'
             'ddd67e6193ade819ee21f1706d1b03b9151f1d2d2843701e2d19d8b183631707'
             '17f7cf47ad0d7b5ac895ae588fd62c7f85a13842588161b6a24c7d480f062be4'
-            'c6a85b621bc4a5f7404c4b418d49eef900f69d64713c63b50978b2ef205cdd26'
+            '0c8ffe335ea69bf8f17dd3de97cac84851dbd631e2eeccec543608cc04de2127'
             'SKIP'
-            '103ca0e20f20275e46e8dbcbdbdeace94b0b59da8911dd2f4a1b6d4ad0a8037f'
+            '0ef991cff4aa382fdd24257cfea35a2137de9886a236ce369389814bd50999ee'
             'SKIP'
-            'fe6a8a62d5b3a3edfb0d9497eb1e4cf4cb51edfae8124acc6a6ca3ac2de14cea'
+            '92e5016c8f7f7d81ccd8fbc1feba5b478c1933722ab02f76ed449e6f67c2ada6'
             'SKIP'
-            '75a31536ebce17d3b3adf7ba45d10549d31b6f826487cd4989383591f5bf5d19'
+            '99626fe327b8f8ae24c044b86665c870cdc502af812eb5d29bc961ff90bb3d28'
             'SKIP'
             '0b91367d2088e8850a37b47a0cba0bd9107695fc81a00ab1933465ada2a16a2f'
             '531c3658e229619e56bb01659fb81f401767b85e1d6e2acd1ac67ee3414a168c'
