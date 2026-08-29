@@ -57,7 +57,12 @@ pub fn run(force_package_mode: bool) -> anyhow::Result<()> {
     let mut terminal = enter_terminal()?;
     let result = event_loop(&mut terminal, force_package_mode);
     leave_terminal(&mut terminal)?;
-    result
+    if result? {
+        // Printed after the alternate screen is torn down so it lands in
+        // the user's shell, not the vanished TUI.
+        println!("Restarted the voxtype daemon to apply saved config changes.");
+    }
+    Ok(())
 }
 
 fn enter_terminal() -> anyhow::Result<Tui> {
@@ -78,7 +83,9 @@ fn leave_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()> {
+/// Returns `true` when the daemon was restarted on the way out so `run()`
+/// can tell the user once the terminal is back to normal.
+fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<bool> {
     let mut app = App::new(force_package_mode);
     let mut last_general_refresh = std::time::Instant::now();
     let general_refresh_interval = Duration::from_secs(2);
@@ -111,7 +118,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()
                 if let Some(action) = handle_global_key(&mut app, key) {
                     match dispatch_action(terminal, &mut app, action)? {
                         LoopControl::Continue => continue,
-                        LoopControl::Quit => return Ok(()),
+                        LoopControl::Quit => return Ok(restart_if_config_newer(&app)),
                     }
                 }
 
@@ -123,7 +130,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()
 
                 match dispatch_action(terminal, &mut app, action)? {
                     LoopControl::Continue => {}
-                    LoopControl::Quit => return Ok(()),
+                    LoopControl::Quit => return Ok(restart_if_config_newer(&app)),
                 }
             }
             Event::Mouse(mouse) => {
@@ -230,7 +237,29 @@ fn restart_voxtype_daemon(app: &mut App) {
     let _ = std::process::Command::new("systemctl")
         .args(["--user", "restart", "voxtype"])
         .status();
+    // The freshly (re)started daemon has read the config as it stands now,
+    // so quitting doesn't need another restart unless a later save lands.
+    app.config_synced_mtime = app::config_file_mtime();
     app.refresh_inventory();
+}
+
+/// Restart the daemon on the way out of the TUI when a save landed after
+/// the daemon's last known (re)start, so config-only changes (an engine
+/// switch on a binary that supports both, a hotkey edit, ...) take effect
+/// without a manual `systemctl --user restart voxtype`. The decision logic
+/// lives in `app::should_restart_on_quit`; see its doc for the cases.
+fn restart_if_config_newer(app: &App) -> bool {
+    let restart = app::should_restart_on_quit(
+        crate::daemon_status::is_daemon_running(),
+        app.config_synced_mtime,
+        app::config_file_mtime(),
+    );
+    if restart {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "restart", "voxtype"])
+            .status();
+    }
+    restart
 }
 
 /// Routes keypresses while the save-on-exit prompt is showing.
