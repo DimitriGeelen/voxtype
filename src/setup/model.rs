@@ -2180,22 +2180,94 @@ pub fn ensure_ecapa_model() -> Option<std::path::PathBuf> {
     }
 }
 
+/// Which config writer a `setup model --set <name>` should route to.
+///
+/// `--set` used to funnel every name into the whisper writer, which
+/// hard-codes `engine = "whisper"`. Passing a Parakeet model produced a
+/// self-contradictory config (`engine = "whisper"` + a Parakeet name in
+/// `[whisper].model`) that crash-loops the daemon while `--set` reports
+/// success (#610). Anything that is not a known engine's registry name
+/// still routes to Whisper: whisper accepts bare registry names and
+/// filesystem paths to .bin files, so unknown strings belong there.
+#[derive(Debug, PartialEq)]
+enum SetModelRoute {
+    Whisper,
+    Parakeet,
+    /// A known model of an engine `--set` has no config writer for yet.
+    UnsupportedEngine(&'static str),
+}
+
+fn set_model_route(model_name: &str) -> SetModelRoute {
+    // Whisper registry names win outright: engines share short names with
+    // whisper (SenseVoice literally has a model named "small"), and `--set`
+    // has always meant the whisper model for those. Only names whisper does
+    // not claim are classified against the other engines.
+    if is_valid_model(model_name) {
+        SetModelRoute::Whisper
+    } else if is_parakeet_model(model_name) {
+        SetModelRoute::Parakeet
+    } else if MOONSHINE_MODELS
+        .iter()
+        .any(|m| m.dir_name == model_name || m.name == model_name)
+    {
+        // Moonshine registry `name`s ("base", "tiny") all collide with
+        // whisper and are claimed above; only the unambiguous dir_names
+        // ("moonshine-base") reach this arm in practice.
+        SetModelRoute::UnsupportedEngine("moonshine")
+    } else if is_sensevoice_model(model_name) {
+        SetModelRoute::UnsupportedEngine("sensevoice")
+    } else {
+        SetModelRoute::Whisper
+    }
+}
+
 /// Set a specific model as the default (must already be downloaded)
 pub async fn set_model(model_name: &str, restart: bool) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
-    let filename = get_model_filename(model_name);
-    let model_path = models_dir.join(&filename);
 
-    // Verify the model exists
-    if !model_path.exists() {
-        print_failure(&format!("Model '{}' is not installed", model_name));
-        println!("\n  Run 'voxtype setup model' to download it first.");
-        println!("  Or 'voxtype setup model --list' to see installed models.");
-        anyhow::bail!("Model not installed: {}", model_name);
+    match set_model_route(model_name) {
+        SetModelRoute::Parakeet => {
+            let model_dir = models_dir.join(model_name);
+            if !model_dir.exists() {
+                print_failure(&format!("Model '{}' is not installed", model_name));
+                println!(
+                    "\n  Run 'voxtype setup --download --model {}' to download it first.",
+                    model_name
+                );
+                anyhow::bail!("Model not installed: {}", model_name);
+            }
+            // Writes engine = "parakeet" and [parakeet].model, and prints
+            // its own success line naming both.
+            update_config_parakeet(model_name)?;
+        }
+        SetModelRoute::UnsupportedEngine(engine) => {
+            print_failure(&format!(
+                "'{}' is a {} model; `setup model --set` cannot activate it yet",
+                model_name, engine
+            ));
+            println!(
+                "\n  Use: voxtype setup --download --model {} --activate",
+                model_name
+            );
+            println!("  Or switch engines in the TUI: voxtype configure");
+            anyhow::bail!("--set does not support {} models", engine);
+        }
+        SetModelRoute::Whisper => {
+            let filename = get_model_filename(model_name);
+            let model_path = models_dir.join(&filename);
+
+            // Verify the model exists
+            if !model_path.exists() {
+                print_failure(&format!("Model '{}' is not installed", model_name));
+                println!("\n  Run 'voxtype setup model' to download it first.");
+                println!("  Or 'voxtype setup model --list' to see installed models.");
+                anyhow::bail!("Model not installed: {}", model_name);
+            }
+
+            // Update the config
+            update_config_model(model_name)?;
+        }
     }
-
-    // Update the config
-    update_config_model(model_name)?;
 
     if restart {
         println!("  Restarting daemon...");
@@ -3695,6 +3767,35 @@ mode = "type"
         assert!(result.contains("[whisper]"));
         assert!(result.contains("[hotkey]"));
         assert!(result.contains("[output]"));
+    }
+
+    /// Regression for #610: `setup model --set <parakeet-model>` routed to
+    /// the whisper config writer, which hard-codes `engine = "whisper"` and
+    /// produced a crash-looping config while reporting success. Known
+    /// Parakeet names must route to the Parakeet writer; known models of
+    /// engines --set can't activate must be refused; everything else (bare
+    /// whisper names, .bin paths) stays on the Whisper writer.
+    #[test]
+    fn set_model_routes_by_engine() {
+        assert_eq!(
+            set_model_route("parakeet-tdt-0.6b-v3"),
+            SetModelRoute::Parakeet
+        );
+        assert_eq!(
+            set_model_route("parakeet-unified-en-0.6b"),
+            SetModelRoute::Parakeet
+        );
+        // "small" is BOTH a whisper name and a SenseVoice registry name;
+        // whisper has owned it in --set since before SenseVoice existed.
+        assert_eq!(set_model_route("small"), SetModelRoute::Whisper);
+        assert_eq!(
+            set_model_route("/home/user/models/ggml-custom.bin"),
+            SetModelRoute::Whisper
+        );
+        assert_eq!(
+            set_model_route("moonshine-base"),
+            SetModelRoute::UnsupportedEngine("moonshine")
+        );
     }
 
     #[test]
