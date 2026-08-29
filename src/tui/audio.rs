@@ -1,6 +1,5 @@
 //! Audio settings: input device, max duration, media behavior, feedback sounds.
 
-use cpal::traits::{DeviceTrait, HostTrait};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
@@ -15,6 +14,7 @@ use super::common::{
     self, FeedbackLevel as CommonFeedback, FormRowSpec, TextInput, TextInputResult,
 };
 use super::config_editor::{ConfigEditor, EditorError};
+use crate::audio::devices::enumerate_input_devices;
 
 #[derive(Debug, Clone)]
 pub struct AudioState {
@@ -266,65 +266,6 @@ impl AudioState {
         }
         self.dirty_since_load = true;
         self.feedback = None;
-    }
-}
-
-fn enumerate_input_devices() -> Vec<String> {
-    // ALSA's PCM probing prints "Cannot open device /dev/dsp" and similar
-    // messages to stderr for every device cpal touches. Inside the TUI's
-    // alternate screen those lines paint over our frame and corrupt the
-    // next redraw. Silence stderr for the duration of the probe.
-    let _silenced = SilencedStderr::install();
-
-    let mut out = vec!["default".to_string()];
-    let host = cpal::default_host();
-    if let Ok(devices) = host.input_devices() {
-        for d in devices {
-            if let Ok(name) = d.name() {
-                if name != "default" && !out.contains(&name) {
-                    out.push(name);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// RAII guard that redirects fd 2 (stderr) to /dev/null on construction and
-/// restores the original fd on drop. Used to swallow noisy ALSA / cpal
-/// stderr during device enumeration so it doesn't bleed into the TUI's
-/// alternate screen.
-struct SilencedStderr {
-    saved_fd: Option<libc::c_int>,
-}
-
-impl SilencedStderr {
-    fn install() -> Self {
-        let null_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY) };
-        if null_fd < 0 {
-            return Self { saved_fd: None };
-        }
-        let saved = unsafe { libc::dup(libc::STDERR_FILENO) };
-        if saved < 0 {
-            unsafe { libc::close(null_fd) };
-            return Self { saved_fd: None };
-        }
-        unsafe { libc::dup2(null_fd, libc::STDERR_FILENO) };
-        unsafe { libc::close(null_fd) };
-        Self {
-            saved_fd: Some(saved),
-        }
-    }
-}
-
-impl Drop for SilencedStderr {
-    fn drop(&mut self) {
-        if let Some(saved) = self.saved_fd.take() {
-            unsafe {
-                libc::dup2(saved, libc::STDERR_FILENO);
-                libc::close(saved);
-            }
-        }
     }
 }
 

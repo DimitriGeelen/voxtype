@@ -112,7 +112,7 @@ impl AdvancedState {
         // it). When the user flips streaming on from off, check the active
         // Parakeet model and auto-switch to the canonical streaming-capable
         // one if needed. Tell them clearly so they know to run
-        // `voxtype setup model` next — the download isn't blocking on the
+        // the model download next — it isn't blocking on the
         // TUI save action (it's ~2.7 GB). #423.
         let auto_switched_model: Option<(String, &'static str)> =
             if self.streaming && !was_streaming {
@@ -162,7 +162,7 @@ impl AdvancedState {
                     // Park the model name on state so the next 'd' keypress
                     // can fork the download. Any other key is treated as
                     // "skip"; the user can re-trigger by running
-                    // `voxtype setup model <NAME>` directly.
+                    // `voxtype setup --download --model <NAME>` directly.
                     self.pending_download = Some(to.to_string());
                 }
                 let level = if promoted_hotkey_mode || did_auto_switch {
@@ -613,7 +613,7 @@ fn spawn_background_model_download(model_name: String) {
                         SYNC_HINT,
                         "Voxtype",
                         &format!(
-                            "Model download failed: {}. Run `voxtype setup model {}` to retry.",
+                            "Model download failed: {}. Run `voxtype setup --download --model {}` to retry.",
                             e, model_name
                         ),
                     ])

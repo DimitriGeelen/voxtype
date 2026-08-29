@@ -88,6 +88,15 @@ impl TranscriptionEngine {
     /// this value as a string literal because `build.rs` includes the CLI
     /// module via `#[path]` and cannot reach into `crate::config`; a test
     /// pins that constant against this method's output.
+    /// Every variant's canonical name, in declaration order. Cached like
+    /// [`Self::names_csv`] so callers can hold a `&'static [&'static str]`
+    /// instead of re-iterating the enum.
+    pub fn names() -> &'static [&'static str] {
+        use strum::IntoEnumIterator;
+        static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+        NAMES.get_or_init(|| Self::iter().map(Self::name).collect())
+    }
+
     pub fn names_csv() -> &'static str {
         use strum::IntoEnumIterator;
         static NAMES: std::sync::OnceLock<String> = std::sync::OnceLock::new();

@@ -61,7 +61,7 @@ Older distros (Ubuntu 22.04, Debian Bookworm, Fedora 39) can [build from source]
 | `ydotool` | Fallback (X11/TTY) | Requires a daemon |
 | `wl-clipboard` | Recommended | Clipboard fallback |
 | `libnotify` | Optional | Desktop notifications |
-| `playerctl` | Optional | Pause MPRIS players while recording |
+| `playerctl` | Not needed | Media pausing talks D-Bus directly since v1.0.0; earlier versions shelled out to it |
 | `gtk4-layer-shell` | Optional | Runtime for the GTK4 OSD visualizer |
 
 > **PipeWire users:** install `pipewire-alsa` so ALSA-based apps like Voxtype can capture audio. Without it you get "device not available" errors.
@@ -150,7 +150,7 @@ sudo apt install ./voxtype_0.7.5-1_amd64.deb
 Recommended optional packages:
 
 ```bash
-sudo apt install wtype wl-clipboard libnotify-bin playerctl pipewire-alsa
+sudo apt install wtype wl-clipboard libnotify-bin pipewire-alsa
 ```
 
 The .deb ships every Linux binary variant (avx2, avx512, vulkan, plus ONNX CPU/CUDA/MIGraphX) under `/usr/lib/voxtype/`. Run `sudo voxtype setup gpu --enable` after install to pick a GPU binary.
@@ -167,7 +167,7 @@ sudo dnf install ./voxtype-0.7.5-1.x86_64.rpm
 Recommended optional packages:
 
 ```bash
-sudo dnf install wtype wl-clipboard libnotify playerctl pipewire-alsa
+sudo dnf install wtype wl-clipboard libnotify pipewire-alsa
 ```
 
 Fedora's ydotool ships as a system service that needs extra setup. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#ydotool-daemon-not-running) if you need ydotool specifically; otherwise `wtype` (Wayland) or `dotool` (KDE/GNOME Wayland) is the better default.

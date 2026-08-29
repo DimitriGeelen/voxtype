@@ -16,6 +16,7 @@ Solutions to common issues when using Voxtype.
   - [Wrong characters on non-US keyboard layouts](#wrong-characters-on-non-us-keyboard-layouts-yz-swapped-qwertz-azerty)
 - [Performance Issues](#performance-issues)
 - [Soniox Backend Issues](#soniox-backend-issues)
+- [Media Does Not Pause While Recording (Omarchy Quattro)](#media-does-not-pause-while-recording-omarchy-quattro)
 - [Quickshell OSD Issues](#quickshell-osd-issues)
 - [Systemd Service Issues](#systemd-service-issues)
 - [Debug Mode](#debug-mode)
@@ -1146,6 +1147,37 @@ async_max_wait_secs = 300
 This notification used to appear when you released the hotkey and Soniox's server-side timer fired before the connection fully closed. Voxtype now suppresses 408s that arrive **after** you've signalled end-of-audio, so this should be silent. If you still see it, your build predates the fix (any release v0.7.5 or later includes it).
 
 ---
+
+## Media Does Not Pause While Recording (Omarchy Quattro)
+
+**Symptom:** `pause_media = true` is set, but music keeps playing while you
+dictate. Common on Omarchy Quattro, whose upgrade removes `playerctl` while the
+shipped Voxtype config still enables media pausing.
+
+**Cause:** Voxtype v0.7.5 and earlier paused players by shelling out to
+`playerctl`. When that binary is absent the pause silently does nothing.
+
+**Fix:** Upgrade to Voxtype v1.0.0 or newer. Media pausing now speaks MPRIS over
+D-Bus directly and needs no external binary, so it works on a playerctl-free
+system.
+
+If you must stay on v0.7.5, either install `playerctl` or turn the feature off:
+
+```toml
+[audio]
+pause_media = false
+```
+
+**Check which players Voxtype can see:**
+
+```bash
+busctl --user list | grep org.mpris.MediaPlayer2
+```
+
+An empty list means no MPRIS-capable player is running, which is a different
+problem from a missing `playerctl`. Some players (notably certain browsers)
+report unreliable MPRIS status; skip those with
+`pause_media_ignored_players`.
 
 ## Quickshell OSD Issues
 

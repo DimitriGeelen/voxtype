@@ -2437,7 +2437,7 @@ icon_theme = "nerd-font"  # or: material, phosphor, codicons, minimal, dots, arr
 
 Available themes include Nerd Font, Material Design Icons, Phosphor, VS Code Codicons, and several universal themes that don't require special fonts (minimal, dots, arrows, text).
 
-**Extended status info:** Use `--extended` to include model, device, and backend in the JSON output and tooltip:
+**Extended status info:** Use `--extended` to include model, device, and backend in the JSON output and tooltip. The backend field describes the running daemon's binary, not the package-selected one, so it stays accurate when the daemon was started before a variant switch or from a systemd `ExecStart=` override. A daemon running a binary that is not an installed variant reports `custom`:
 
 ```json
 "custom/voxtype": {
