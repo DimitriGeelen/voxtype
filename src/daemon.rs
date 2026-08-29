@@ -975,6 +975,15 @@ impl Daemon {
     /// at 100 Hz during recording. The emitter task is tracked so it can
     /// be cleanly aborted when recording stops.
     async fn start_recording_capture(&mut self) -> std::result::Result<Box<dyn AudioCapture>, ()> {
+        // A `record cancel` issued while idle leaves its trigger file behind,
+        // and the idle-time sweep that was meant to consume it never runs:
+        // its 500ms timer sits in a select! loop whose unconditional 100ms
+        // poll arm recreates every timer each iteration, so the 500ms sleep
+        // restarts forever. A stale trigger then kills this recording (and
+        // each one after it) ~100-400ms in. Consume it here, at the single
+        // point every recording path passes through, so a cancel can only
+        // ever apply to a recording that was live when it was issued (#606).
+        cleanup_cancel_file();
         match audio::create_capture(&self.config.audio) {
             Ok(mut capture) => match capture.start().await {
                 Ok(chunk_rx) => {
@@ -1036,6 +1045,10 @@ impl Daemon {
         streaming_chain: &mut Option<Vec<Box<dyn TextOutput>>>,
         model_override: Option<String>,
     ) -> bool {
+        // Same stale-trigger hazard as start_recording_capture: Streaming is
+        // an is_recording() state, so a leftover cancel file would kill the
+        // session moments after it starts. See #606.
+        cleanup_cancel_file();
         let Some(transcriber) = transcriber_preloaded.as_ref() else {
             return false;
         };
