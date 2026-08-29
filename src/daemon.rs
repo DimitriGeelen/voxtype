@@ -975,6 +975,15 @@ impl Daemon {
     /// at 100 Hz during recording. The emitter task is tracked so it can
     /// be cleanly aborted when recording stops.
     async fn start_recording_capture(&mut self) -> std::result::Result<Box<dyn AudioCapture>, ()> {
+        // A `record cancel` issued while idle leaves its trigger file behind,
+        // and the idle-time sweep that was meant to consume it never runs:
+        // its 500ms timer sits in a select! loop whose unconditional 100ms
+        // poll arm recreates every timer each iteration, so the 500ms sleep
+        // restarts forever. A stale trigger then kills this recording (and
+        // each one after it) ~100-400ms in. Consume it here, at the single
+        // point every recording path passes through, so a cancel can only
+        // ever apply to a recording that was live when it was issued (#606).
+        cleanup_cancel_file();
         match audio::create_capture(&self.config.audio) {
             Ok(mut capture) => match capture.start().await {
                 Ok(chunk_rx) => {
@@ -1036,6 +1045,10 @@ impl Daemon {
         streaming_chain: &mut Option<Vec<Box<dyn TextOutput>>>,
         model_override: Option<String>,
     ) -> bool {
+        // Same stale-trigger hazard as start_recording_capture: Streaming is
+        // an is_recording() state, so a leftover cancel file would kill the
+        // session moments after it starts. See #606.
+        cleanup_cancel_file();
         let Some(transcriber) = transcriber_preloaded.as_ref() else {
             return false;
         };
@@ -4115,7 +4128,32 @@ impl Daemon {
 
         tracing::info!("Daemon stopped");
 
-        Ok(())
+        // Exit without unwinding. Everything this daemon owns is already
+        // released above: profile override, state file, meeting state file,
+        // PID file and the OSD level socket. What remains between here and
+        // `main` returning is tokio teardown plus `_dl_fini` running the
+        // static destructors of ONNX Runtime, ROCm/MIGraphX and PipeWire, and
+        // that stretch is actively hostile:
+        //
+        //   * The ORT/MIGraphX stack releases a shared_ptr it has already
+        //     freed, decrementing a refcount inside a chunk parked in glibc's
+        //     448-byte bin. Nothing faults at the time. glibc aborts on the
+        //     next free landing in that size class, which at exit is
+        //     PipeWire's `pw_log_topic_unregister`. PipeWire is the detector,
+        //     not the cause; any 448-class free would do it. Each abort costs
+        //     a ~1.9 GB core dump, a desktop crash notification, and a unit
+        //     recorded as `Failed with result 'core-dump'`.
+        //   * ROCm's AsyncEventsLoop threads park indefinitely in KFD ioctls
+        //     and MIGraphX's embedded LLVM thread pool never joins, so the
+        //     same teardown can hang instead of aborting.
+        //
+        // ANY CLEANUP THIS DAEMON NEEDS MUST GO ABOVE THIS LINE. Code added
+        // below it will never run.
+        //
+        // `_exit` skips stdio flushing. Rust's stderr is unbuffered so the
+        // tracing output above is already out; anything that starts buffering
+        // daemon output has to flush before reaching here.
+        unsafe { libc::_exit(0) };
     }
 }
 
