@@ -1,5 +1,7 @@
 //! Interactive model selection and download
 
+use super::manifest::{ExpectedFile, ModelArtifact};
+use super::progress::{self, FileProgress};
 use super::{print_failure, print_info, print_success, print_warning};
 use crate::config::{Config, TranscriptionEngine};
 use crate::transcribe::whisper::{get_model_filename, get_model_url};
@@ -199,6 +201,14 @@ pub fn is_streaming_compatible_parakeet(name: &str) -> bool {
     PARAKEET_MODELS
         .iter()
         .any(|m| m.name == name && m.streaming_compatible)
+}
+
+/// Returns true when the named model is one this build's registry knows about.
+/// Lets callers distinguish "known model that doesn't support streaming"
+/// (error case) from "unknown custom model" (warn-but-proceed case) when
+/// gating the streaming pipeline at load time.
+pub fn is_known_parakeet_model(name: &str) -> bool {
+    PARAKEET_MODELS.iter().any(|m| m.name == name)
 }
 
 /// Canonical Parakeet model name that the TUI auto-switches to when the user
@@ -660,6 +670,690 @@ const COHERE_MODELS: &[CohereModelInfo] = &[
 ];
 
 // =============================================================================
+// ModelArtifact implementations
+// =============================================================================
+//
+// Each ONNX engine's model-info struct implements `ModelArtifact` so the
+// unified `download_artifact` consumes them uniformly. The trait's
+// `name()` is the URL segment + on-disk directory name; for engines that
+// historically used a `dir_name` distinct from `name` (Moonshine,
+// SenseVoice, Paraformer, Dolphin, Omnilingual, Cohere), we return
+// `dir_name` so the R2 layout matches what's on disk. For Parakeet the
+// model `name` was always the directory name; nothing to translate.
+
+impl ModelArtifact for ParakeetModelInfo {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "parakeet"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        self.files
+            .iter()
+            .map(|(path, size)| ExpectedFile {
+                path: (*path).to_string(),
+                size: *size,
+            })
+            .collect()
+    }
+}
+
+impl ModelArtifact for MoonshineModelInfo {
+    // Intentional: the trait method is `name()` but the struct field that
+    // serves as the canonical identifier is `dir_name`. Clippy's
+    // misnamed_getters lint fires on the mismatch; it's not a bug.
+    #[allow(clippy::misnamed_getters)]
+    fn name(&self) -> &str {
+        self.dir_name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "moonshine"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        // Moonshine's upstream files live under `onnx/...` paths but we
+        // rewrite them to canonical local names. The mirror script flattens
+        // the directory layout in R2 to the local-canonical names, so we
+        // report the local name as the expected path.
+        self.files
+            .iter()
+            .map(|(_repo, local)| ExpectedFile {
+                path: (*local).to_string(),
+                size: 0,
+            })
+            .collect()
+    }
+}
+
+impl ModelArtifact for SenseVoiceModelInfo {
+    // Intentional: the trait method is `name()` but the struct field that
+    // serves as the canonical identifier is `dir_name`. Clippy's
+    // misnamed_getters lint fires on the mismatch; it's not a bug.
+    #[allow(clippy::misnamed_getters)]
+    fn name(&self) -> &str {
+        self.dir_name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "sensevoice"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        self.files
+            .iter()
+            .map(|(_repo, local)| ExpectedFile {
+                path: (*local).to_string(),
+                size: 0,
+            })
+            .collect()
+    }
+}
+
+impl ModelArtifact for ParaformerModelInfo {
+    // Intentional: the trait method is `name()` but the struct field that
+    // serves as the canonical identifier is `dir_name`. Clippy's
+    // misnamed_getters lint fires on the mismatch; it's not a bug.
+    #[allow(clippy::misnamed_getters)]
+    fn name(&self) -> &str {
+        self.dir_name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "paraformer"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        self.files
+            .iter()
+            .map(|(_repo, local)| ExpectedFile {
+                path: (*local).to_string(),
+                size: 0,
+            })
+            .collect()
+    }
+}
+
+impl ModelArtifact for DolphinModelInfo {
+    // Intentional: the trait method is `name()` but the struct field that
+    // serves as the canonical identifier is `dir_name`. Clippy's
+    // misnamed_getters lint fires on the mismatch; it's not a bug.
+    #[allow(clippy::misnamed_getters)]
+    fn name(&self) -> &str {
+        self.dir_name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "dolphin"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        self.files
+            .iter()
+            .map(|(_repo, local)| ExpectedFile {
+                path: (*local).to_string(),
+                size: 0,
+            })
+            .collect()
+    }
+}
+
+impl ModelArtifact for OmnilingualModelInfo {
+    // Intentional: the trait method is `name()` but the struct field that
+    // serves as the canonical identifier is `dir_name`. Clippy's
+    // misnamed_getters lint fires on the mismatch; it's not a bug.
+    #[allow(clippy::misnamed_getters)]
+    fn name(&self) -> &str {
+        self.dir_name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "omnilingual"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        self.files
+            .iter()
+            .map(|(_repo, local)| ExpectedFile {
+                path: (*local).to_string(),
+                size: 0,
+            })
+            .collect()
+    }
+}
+
+impl ModelArtifact for CohereModelInfo {
+    // Intentional: the trait method is `name()` but the struct field that
+    // serves as the canonical identifier is `dir_name`. Clippy's
+    // misnamed_getters lint fires on the mismatch; it's not a bug.
+    #[allow(clippy::misnamed_getters)]
+    fn name(&self) -> &str {
+        self.dir_name
+    }
+    fn engine_prefix(&self) -> &'static str {
+        "cohere"
+    }
+    fn upstream_repo(&self) -> &str {
+        self.huggingface_repo
+    }
+    fn expected_files(&self) -> Vec<ExpectedFile> {
+        self.files
+            .iter()
+            .map(|(_repo, local)| ExpectedFile {
+                path: (*local).to_string(),
+                size: 0,
+            })
+            .collect()
+    }
+}
+
+// =============================================================================
+// Registry export (for the mirror script)
+// =============================================================================
+
+/// One entry in the registry consumed by the `voxtype-mirror-registry`
+/// helper binary. The mirror script reads JSON-serialised
+/// `RegistryEntry`s and iterates them to populate R2 from upstream HF.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RegistryEntry {
+    pub engine_prefix: &'static str,
+    pub name: String,
+    pub upstream_repo: String,
+    /// Mapping from upstream HF repo path to the local file path we
+    /// publish on R2. Identical to what `download_artifact` writes to
+    /// disk. The mirror script keeps the local form authoritative so
+    /// the manifest's sha256s match what the runtime will see.
+    pub files: Vec<RegistryFile>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RegistryFile {
+    pub upstream_path: String,
+    pub local_path: String,
+}
+
+/// Files an ONNX model is expected to have on disk, by engine and model name.
+///
+/// Only the file *names* come from here. The compiled-in sizes in the model
+/// tables are not usable as an integrity signal: upstream re-uploads have
+/// moved on from several of them (`parakeet-tdt-0.6b-v3-int8`'s encoder is
+/// listed as 683,671,552 bytes and is actually 652,183,999), and
+/// `validate_manifest` only ever compared paths, so the drift went unnoticed.
+/// Names are trustworthy precisely because that check pins them against the
+/// published manifest on every download.
+///
+/// Empty for whisper, whose models are single files with no registry entry.
+pub(crate) fn expected_file_names(engine: &str, model: &str) -> Vec<String> {
+    registry_snapshot()
+        .into_iter()
+        .find(|e| e.engine_prefix == engine && e.name == model)
+        .map(|e| e.files.into_iter().map(|f| f.local_path).collect())
+        .unwrap_or_default()
+}
+
+/// Snapshot the full ONNX-engine model registry (Parakeet, Moonshine,
+/// SenseVoice, Paraformer, Dolphin, Omnilingual, Cohere) into a single
+/// flat list. Used by `voxtype-mirror-registry` to drive
+/// `scripts/mirror-models-to-r2.sh`.
+pub fn registry_snapshot() -> Vec<RegistryEntry> {
+    let mut out = Vec::new();
+    for m in PARAKEET_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "parakeet",
+            name: m.name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            // Parakeet's `files` is `(filename, size)`; the same name is
+            // used upstream and locally.
+            files: m
+                .files
+                .iter()
+                .map(|(f, _)| RegistryFile {
+                    upstream_path: (*f).to_string(),
+                    local_path: (*f).to_string(),
+                })
+                .collect(),
+        });
+    }
+    for m in MOONSHINE_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "moonshine",
+            name: m.dir_name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            files: m
+                .files
+                .iter()
+                .map(|(remote, local)| RegistryFile {
+                    upstream_path: (*remote).to_string(),
+                    local_path: (*local).to_string(),
+                })
+                .collect(),
+        });
+    }
+    for m in SENSEVOICE_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "sensevoice",
+            name: m.dir_name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            files: m
+                .files
+                .iter()
+                .map(|(remote, local)| RegistryFile {
+                    upstream_path: (*remote).to_string(),
+                    local_path: (*local).to_string(),
+                })
+                .collect(),
+        });
+    }
+    for m in PARAFORMER_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "paraformer",
+            name: m.dir_name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            files: m
+                .files
+                .iter()
+                .map(|(remote, local)| RegistryFile {
+                    upstream_path: (*remote).to_string(),
+                    local_path: (*local).to_string(),
+                })
+                .collect(),
+        });
+    }
+    for m in DOLPHIN_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "dolphin",
+            name: m.dir_name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            files: m
+                .files
+                .iter()
+                .map(|(remote, local)| RegistryFile {
+                    upstream_path: (*remote).to_string(),
+                    local_path: (*local).to_string(),
+                })
+                .collect(),
+        });
+    }
+    for m in OMNILINGUAL_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "omnilingual",
+            name: m.dir_name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            files: m
+                .files
+                .iter()
+                .map(|(remote, local)| RegistryFile {
+                    upstream_path: (*remote).to_string(),
+                    local_path: (*local).to_string(),
+                })
+                .collect(),
+        });
+    }
+    for m in COHERE_MODELS {
+        out.push(RegistryEntry {
+            engine_prefix: "cohere",
+            name: m.dir_name.to_string(),
+            upstream_repo: m.huggingface_repo.to_string(),
+            files: m
+                .files
+                .iter()
+                .map(|(remote, local)| RegistryFile {
+                    upstream_path: (*remote).to_string(),
+                    local_path: (*local).to_string(),
+                })
+                .collect(),
+        });
+    }
+    out
+}
+
+// =============================================================================
+// Unified R2 downloader
+// =============================================================================
+
+/// Download a model artifact from the voxtype-models R2 mirror.
+///
+/// Fetches `{MODELS_BASE_URL}/{engine_prefix}/{name}/manifest.json`, validates
+/// it against the artifact's identity and expected file list, then downloads
+/// every file the manifest enumerates into `{models_dir}/{name}/`. Each file
+/// is sha256-verified against the manifest as soon as the download finishes;
+/// a mismatched file is deleted and the call fails.
+///
+/// No HuggingFace fallback. Voxtype controls R2 directly so we can serve
+/// integrity guarantees that community HF accounts can't promise; falling
+/// back to HF would defeat the purpose of the migration. If R2 is genuinely
+/// unreachable, the error message points users at the Cloudflare status
+/// page.
+pub fn download_artifact<T: ModelArtifact + ?Sized>(
+    artifact: &T,
+    models_dir: &Path,
+) -> anyhow::Result<()> {
+    use super::manifest::{file_url, manifest_url, validate_manifest, Manifest};
+
+    let model_dir = models_dir.join(artifact.name());
+    std::fs::create_dir_all(&model_dir)?;
+
+    let manifest_url_str = manifest_url(artifact);
+    let manifest_json = curl_fetch_text(&manifest_url_str).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to fetch manifest from {}: {}.\n  \
+             If this persists, check models.voxtype.io status: \
+             https://www.cloudflarestatus.com/",
+            manifest_url_str,
+            e
+        )
+    })?;
+
+    let manifest: Manifest = serde_json::from_str(&manifest_json).map_err(|e| {
+        anyhow::anyhow!("Manifest at {} is not valid JSON: {}", manifest_url_str, e)
+    })?;
+    validate_manifest(&manifest, artifact)?;
+
+    let human = !progress::is_json();
+    if human {
+        println!(
+            "\nDownloading {} ({} files via {})...\n",
+            artifact.name(),
+            manifest.files.len(),
+            manifest_url_str,
+        );
+    }
+
+    for file in &manifest.files {
+        let dest = model_dir.join(&file.path);
+
+        if dest.exists() {
+            // Re-verify existing file's sha256 so a partial/corrupt cached
+            // file doesn't silently survive an upgrade. If it matches, skip;
+            // otherwise treat as missing and re-download.
+            match sha256_file(&dest) {
+                Ok(hash) if hash == file.sha256.to_lowercase() => {
+                    if human {
+                        println!("  {} already verified, skipping", file.path);
+                    }
+                    // A panel summing per-file progress still needs to see
+                    // this file reach 100%.
+                    progress::file_already_complete(artifact.name(), &file.path, file.size);
+                    continue;
+                }
+                _ => {
+                    if human {
+                        println!("  {} present but unverified, re-downloading", file.path);
+                    }
+                    let _ = std::fs::remove_file(&dest);
+                }
+            }
+        }
+
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let url = file_url(artifact, &file.path);
+        if human {
+            println!("Downloading {}...", file.path);
+        }
+        let part = download_to_part(&url, &dest, artifact.name(), &file.path, Some(file.size))?;
+
+        // Hash the part file, not the destination: a file only reaches its
+        // final name once it has matched the manifest.
+        let observed = sha256_file(&part).map_err(|e| {
+            let _ = std::fs::remove_file(&part);
+            anyhow::anyhow!("Failed to hash {}: {}", file.path, e)
+        })?;
+        let expected = file.sha256.to_lowercase();
+        if observed != expected {
+            let _ = std::fs::remove_file(&part);
+            anyhow::bail!(
+                "sha256 mismatch for {} (downloaded from {}): expected {}, got {}",
+                file.path,
+                url,
+                expected,
+                observed,
+            );
+        }
+        promote_part(&part, &dest)?;
+    }
+
+    // Leave the manifest behind so later integrity checks have the publisher's
+    // sizes and hashes without a network round trip.
+    super::manifest::write_cached_manifest(&model_dir, &manifest);
+
+    if human {
+        print_success(&format!(
+            "Model '{}' downloaded to {:?}",
+            artifact.name(),
+            model_dir
+        ));
+    }
+    Ok(())
+}
+
+/// Fetch a small text body via curl. Used for `manifest.json`.
+fn curl_fetch_text(url: &str) -> anyhow::Result<String> {
+    let output = Command::new("curl")
+        .args(["-fsSL", "--retry", "2", "--max-time", "30", url])
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run curl: {}", e))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "curl failed with exit code {} (stderr: {})",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+/// Scratch path a download occupies until it has been validated: a hidden
+/// `.part` sibling of `dest`.
+///
+/// Nothing may be written directly to a model's final path. A transfer that
+/// dies part way (SIGPIPE from a closed progress consumer, SIGKILL, power
+/// loss) would otherwise leave a truncated file exactly where the loader and
+/// `model_catalog::model_installed` look, so voxtype would report the model as
+/// installed and the daemon would fail to load it. The `.part` name is both
+/// dot-prefixed and suffixed so no installed-model check can match it.
+fn part_path(dest: &Path) -> std::path::PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
+    let parent = dest.parent().unwrap_or(Path::new("."));
+    parent.join(format!(".{}.part", name))
+}
+
+/// Move a validated download onto its final path.
+///
+/// `rename(2)` within one directory is atomic, so a concurrent reader sees
+/// either no file or the whole, checked file — never a prefix of one.
+fn promote_part(part: &Path, dest: &Path) -> anyhow::Result<()> {
+    std::fs::rename(part, dest).map_err(|e| {
+        let _ = std::fs::remove_file(part);
+        anyhow::anyhow!(
+            "could not move the finished download into place ({} -> {}): {}",
+            part.display(),
+            dest.display(),
+            e
+        )
+    })
+}
+
+/// Download a single URL to `dest`'s `.part` file via curl with a progress
+/// bar, returning the path the bytes landed on. Cleans up on failure.
+///
+/// The caller validates that path and then calls [`promote_part`].
+fn curl_download(url: &str, dest: &Path) -> anyhow::Result<std::path::PathBuf> {
+    let part = part_path(dest);
+    let status = Command::new("curl")
+        .args([
+            "-L",
+            "--fail",
+            "--progress-bar",
+            "-o",
+            part.to_str().unwrap_or("file"),
+            url,
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => Ok(part),
+        Ok(s) => {
+            let _ = std::fs::remove_file(&part);
+            print_failure(&format!(
+                "Download failed: curl exited with code {}",
+                s.code().unwrap_or(-1)
+            ));
+            anyhow::bail!(
+                "Download failed for {} from {}.\n  \
+                 If this persists, check models.voxtype.io status: \
+                 https://www.cloudflarestatus.com/",
+                dest.display(),
+                url
+            )
+        }
+        Err(e) => {
+            print_failure(&format!("Failed to run curl: {}", e));
+            print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
+            anyhow::bail!("curl not available: {}", e)
+        }
+    }
+}
+
+/// How often the JSON progress path samples the growing file. Also the
+/// effective ceiling on event rate: ~4 lines/sec per file.
+const PROGRESS_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Download `url` into `dest`'s `.part` file, reporting progress in whichever
+/// format this process selected, and return the path the bytes landed on.
+///
+/// Nothing is written to `dest` itself; the caller validates the returned path
+/// and calls [`promote_part`] to make the download visible.
+///
+/// Human mode is [`curl_download`], progress bar and all. JSON mode runs curl
+/// silently and samples the part file's length instead, because curl's
+/// `--progress-bar` output is a terminal animation with no byte counts to
+/// parse and `-w` only reports totals once the transfer is over. Sampling the
+/// file costs one `stat` per tick and needs no new dependency.
+///
+/// `total` comes from the R2 manifest where there is one; the whisper path has
+/// no manifest, so it resolves the size with a `HEAD` and passes it in.
+fn download_to_part(
+    url: &str,
+    dest: &Path,
+    model: &str,
+    file: &str,
+    total: Option<u64>,
+) -> anyhow::Result<std::path::PathBuf> {
+    if !progress::is_json() {
+        return curl_download(url, dest);
+    }
+
+    let part = part_path(dest);
+    let total = total.or_else(|| content_length(url));
+    let mut reporter = FileProgress::new(model, file, total);
+
+    let mut child = Command::new("curl")
+        .args([
+            "-L",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "-o",
+            part.to_str().unwrap_or("file"),
+            url,
+        ])
+        .spawn()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "curl not available: {}. Please ensure curl is installed.",
+                e
+            )
+        })?;
+
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => {
+                reporter.finish(file_len(&part));
+                return Ok(part);
+            }
+            Some(status) => {
+                let _ = std::fs::remove_file(&part);
+                anyhow::bail!(
+                    "Download failed for {} from {} (curl exited with code {}).\n  \
+                     If this persists, check models.voxtype.io status: \
+                     https://www.cloudflarestatus.com/",
+                    dest.display(),
+                    url,
+                    status.code().unwrap_or(-1)
+                );
+            }
+            None => {
+                reporter.update(file_len(&part));
+                std::thread::sleep(PROGRESS_POLL);
+            }
+        }
+    }
+}
+
+/// Bytes on disk so far, or 0 before curl has created the file.
+fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Ask the server how big a download is, for the paths that have no manifest
+/// to read a size from. Best effort: a server that refuses `HEAD` just means
+/// the progress events carry `"total":null`.
+fn content_length(url: &str) -> Option<u64> {
+    let output = Command::new("curl")
+        .args(["-sIL", "--max-time", "15", url])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // Redirect chains produce one header block per hop; the last
+    // content-length is the one describing the body we'll receive.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<u64>().ok())?
+        })
+        .next_back()
+}
+
+/// Streaming sha256 of a file on disk. Used both for post-download
+/// verification and for re-validating a previously cached file.
+pub(crate) fn sha256_file(path: &Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+// =============================================================================
 // Whisper Model Functions
 // =============================================================================
 
@@ -1054,40 +1748,19 @@ pub async fn interactive_select() -> anyhow::Result<()> {
         handle_sensevoice_selection(sensevoice_index).await
     } else if paraformer_available && selection <= paraformer_offset + paraformer_count {
         let idx = selection - paraformer_offset;
-        handle_onnx_engine_selection(
-            "paraformer",
-            PARAFORMER_MODELS
-                .iter()
-                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
-                .collect(),
-            idx,
-            validate_onnx_ctc_model,
-        )
-        .await
+        let entries: Vec<(&str, &ParaformerModelInfo)> =
+            PARAFORMER_MODELS.iter().map(|m| (m.name, m)).collect();
+        handle_onnx_engine_selection("paraformer", &entries, idx, validate_onnx_ctc_model).await
     } else if dolphin_available && selection <= dolphin_offset + dolphin_count {
         let idx = selection - dolphin_offset;
-        handle_onnx_engine_selection(
-            "dolphin",
-            DOLPHIN_MODELS
-                .iter()
-                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
-                .collect(),
-            idx,
-            validate_onnx_ctc_model,
-        )
-        .await
+        let entries: Vec<(&str, &DolphinModelInfo)> =
+            DOLPHIN_MODELS.iter().map(|m| (m.name, m)).collect();
+        handle_onnx_engine_selection("dolphin", &entries, idx, validate_onnx_ctc_model).await
     } else if omnilingual_available && selection <= omnilingual_offset + omnilingual_count {
         let idx = selection - omnilingual_offset;
-        handle_onnx_engine_selection(
-            "omnilingual",
-            OMNILINGUAL_MODELS
-                .iter()
-                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
-                .collect(),
-            idx,
-            validate_onnx_ctc_model,
-        )
-        .await
+        let entries: Vec<(&str, &OmnilingualModelInfo)> =
+            OMNILINGUAL_MODELS.iter().map(|m| (m.name, m)).collect();
+        handle_onnx_engine_selection("omnilingual", &entries, idx, validate_onnx_ctc_model).await
     } else if cohere_available && selection <= cohere_offset + cohere_count {
         let idx = selection - cohere_offset;
         handle_cohere_selection(idx).await
@@ -1195,7 +1868,8 @@ async fn handle_parakeet_selection(selection: usize) -> anyhow::Result<()> {
     }
 
     // Download the model
-    download_parakeet_model_by_info(model)?;
+    download_artifact(model, &Config::models_dir())?;
+    validate_parakeet_model(&Config::models_dir().join(model.name))?;
 
     // Update config and restart daemon
     update_config_parakeet(model.name)?;
@@ -1266,7 +1940,8 @@ async fn handle_moonshine_selection(selection: usize) -> anyhow::Result<()> {
     }
 
     // Download the model
-    download_moonshine_model_by_info(model)?;
+    download_artifact(model, &Config::models_dir())?;
+    validate_moonshine_model(&Config::models_dir().join(model.dir_name))?;
 
     // Update config and restart daemon
     update_config_moonshine(model.name)?;
@@ -1310,6 +1985,94 @@ async fn restart_daemon_if_running() {
 // Whisper Download Functions
 // =============================================================================
 
+/// First four bytes of every whisper.cpp model: `GGML_FILE_MAGIC`
+/// (`0x67676d6c`) written little-endian.
+const GGML_MAGIC: [u8; 4] = *b"lmgg";
+
+/// What a finished download has to look like before it may take its final
+/// name. None of these files are on the R2 mirror, so there is no published
+/// sha256 to compare against and this is the whole of their validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentCheck {
+    /// ggml container: whisper models and the Silero VAD model.
+    Ggml,
+    /// No format marker worth checking (ONNX protobufs); completeness only.
+    SizeOnly,
+}
+
+/// Check a freshly downloaded file before it takes the name the loader reads.
+///
+/// The two signals available without a manifest are the server's
+/// `Content-Length` and the file's own magic, which between them catch the
+/// realistic failures: a truncated transfer, and an HTML error page saved
+/// under a `.bin` name.
+pub(crate) fn validate_download(
+    path: &Path,
+    expected_len: Option<u64>,
+    check: ContentCheck,
+) -> anyhow::Result<()> {
+    use std::io::Read;
+
+    let len = std::fs::metadata(path)
+        .map_err(|e| anyhow::anyhow!("could not stat the download: {}", e))?
+        .len();
+    if len == 0 {
+        anyhow::bail!("the download is empty");
+    }
+    if let Some(expected) = expected_len {
+        if len != expected {
+            anyhow::bail!("incomplete download: got {} of {} bytes", len, expected);
+        }
+    }
+
+    if check == ContentCheck::Ggml {
+        let mut magic = [0u8; 4];
+        std::fs::File::open(path)
+            .and_then(|mut f| f.read_exact(&mut magic))
+            .map_err(|e| anyhow::anyhow!("could not read the download: {}", e))?;
+        if magic != GGML_MAGIC {
+            anyhow::bail!(
+                "not a ggml model: expected magic {:02x?}, got {:02x?}. \
+                 The server likely returned an error page instead of the model.",
+                GGML_MAGIC,
+                magic
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Download one file to `dest` without ever exposing a partial one there.
+///
+/// Bytes land on a `.part` sibling, get checked for completeness (and format,
+/// per `check`), and only then take the final name via an atomic rename. Used
+/// by every single-file download that has no R2 manifest behind it: whisper
+/// models, the Silero VAD model, and the auxiliary meeting-mode models.
+///
+/// `label` is the name reported in progress events.
+pub(crate) fn download_atomically(
+    url: &str,
+    dest: &Path,
+    label: &str,
+    check: ContentCheck,
+) -> anyhow::Result<()> {
+    let file = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| label.to_string());
+
+    // Ask the server for the size, since there's no manifest to read it from.
+    // Best effort: a server that refuses HEAD just leaves the size check out.
+    let expected_len = content_length(url);
+
+    let part = download_to_part(url, dest, label, &file, expected_len)?;
+    validate_download(&part, expected_len, check).map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        anyhow::anyhow!("Downloaded file '{}' is not usable: {}", file, e)
+    })?;
+    promote_part(&part, dest)
+}
+
 /// Download a specific Whisper model using curl
 pub fn download_model(model_name: &str) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
@@ -1321,40 +2084,17 @@ pub fn download_model(model_name: &str) -> anyhow::Result<()> {
 
     let url = get_model_url(model_name);
 
-    println!("\nDownloading {}...", model_name);
-    println!("URL: {}", url);
-
-    // Use curl for downloading - it handles progress display and redirects
-    let status = Command::new("curl")
-        .args([
-            "-L",             // Follow redirects
-            "--progress-bar", // Show progress bar
-            "-o",
-            model_path.to_str().unwrap_or("model.bin"),
-            &url,
-        ])
-        .status();
-
-    match status {
-        Ok(exit_status) if exit_status.success() => {
-            print_success(&format!("Saved to {:?}", model_path));
-            Ok(())
-        }
-        Ok(exit_status) => {
-            print_failure(&format!(
-                "Download failed: curl exited with code {}",
-                exit_status.code().unwrap_or(-1)
-            ));
-            // Clean up partial download
-            let _ = std::fs::remove_file(&model_path);
-            anyhow::bail!("Download failed")
-        }
-        Err(e) => {
-            print_failure(&format!("Failed to run curl: {}", e));
-            print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
-            anyhow::bail!("curl not available: {}", e)
-        }
+    if !progress::is_json() {
+        println!("\nDownloading {}...", model_name);
+        println!("URL: {}", url);
     }
+
+    download_atomically(&url, &model_path, model_name, ContentCheck::Ggml)?;
+
+    if !progress::is_json() {
+        print_success(&format!("Saved to {:?}", model_path));
+    }
+    Ok(())
 }
 
 /// GTCRN speech enhancement model URL and filename
@@ -1384,28 +2124,21 @@ pub fn ensure_gtcrn_model() -> Option<std::path::PathBuf> {
 
     println!("Downloading GTCRN speech enhancement model (523 KB)...");
 
-    let status = Command::new("curl")
-        .args([
-            "-L",
-            "--progress-bar",
-            "-o",
-            model_path.to_str().unwrap_or("gtcrn_simple.onnx"),
-            GTCRN_MODEL_URL,
-        ])
-        .status();
-
-    match status {
-        Ok(exit_status) if exit_status.success() => {
+    // These `ensure_*` helpers treat "the file exists" as "the model is
+    // installed" and never re-download, so a partial file here is permanent.
+    // The atomic path is what keeps that from happening.
+    match download_atomically(
+        GTCRN_MODEL_URL,
+        &model_path,
+        "gtcrn",
+        ContentCheck::SizeOnly,
+    ) {
+        Ok(()) => {
             println!("Speech enhancement model downloaded.");
             Some(model_path)
         }
-        Ok(_) => {
-            eprintln!("Warning: Failed to download speech enhancement model. Meetings will work without echo cancellation.");
-            let _ = std::fs::remove_file(&model_path);
-            None
-        }
-        Err(_) => {
-            eprintln!("Warning: curl not available. Speech enhancement model not downloaded.");
+        Err(e) => {
+            eprintln!("Warning: Failed to download speech enhancement model ({e}). Meetings will work without echo cancellation.");
             None
         }
     }
@@ -1430,49 +2163,111 @@ pub fn ensure_ecapa_model() -> Option<std::path::PathBuf> {
 
     println!("Downloading ECAPA-TDNN speaker embedding model (~26 MB)...");
 
-    let status = Command::new("curl")
-        .args([
-            "-L",
-            "--progress-bar",
-            "-o",
-            model_path.to_str().unwrap_or(ECAPA_MODEL_FILENAME),
-            ECAPA_MODEL_URL,
-        ])
-        .status();
-
-    match status {
-        Ok(exit_status) if exit_status.success() => {
+    match download_atomically(
+        ECAPA_MODEL_URL,
+        &model_path,
+        "ecapa-tdnn",
+        ContentCheck::SizeOnly,
+    ) {
+        Ok(()) => {
             println!("Speaker embedding model downloaded.");
             Some(model_path)
         }
-        Ok(_) => {
-            eprintln!("Warning: Failed to download speaker embedding model. ML diarization will fall back to simple speaker attribution.");
-            let _ = std::fs::remove_file(&model_path);
+        Err(e) => {
+            eprintln!("Warning: Failed to download speaker embedding model ({e}). ML diarization will fall back to simple speaker attribution.");
             None
         }
-        Err(_) => {
-            eprintln!("Warning: curl not available. Speaker embedding model not downloaded.");
-            None
-        }
+    }
+}
+
+/// Which config writer a `setup model --set <name>` should route to.
+///
+/// `--set` used to funnel every name into the whisper writer, which
+/// hard-codes `engine = "whisper"`. Passing a Parakeet model produced a
+/// self-contradictory config (`engine = "whisper"` + a Parakeet name in
+/// `[whisper].model`) that crash-loops the daemon while `--set` reports
+/// success (#610). Anything that is not a known engine's registry name
+/// still routes to Whisper: whisper accepts bare registry names and
+/// filesystem paths to .bin files, so unknown strings belong there.
+#[derive(Debug, PartialEq)]
+enum SetModelRoute {
+    Whisper,
+    Parakeet,
+    /// A known model of an engine `--set` has no config writer for yet.
+    UnsupportedEngine(&'static str),
+}
+
+fn set_model_route(model_name: &str) -> SetModelRoute {
+    // Whisper registry names win outright: engines share short names with
+    // whisper (SenseVoice literally has a model named "small"), and `--set`
+    // has always meant the whisper model for those. Only names whisper does
+    // not claim are classified against the other engines.
+    if is_valid_model(model_name) {
+        SetModelRoute::Whisper
+    } else if is_parakeet_model(model_name) {
+        SetModelRoute::Parakeet
+    } else if MOONSHINE_MODELS
+        .iter()
+        .any(|m| m.dir_name == model_name || m.name == model_name)
+    {
+        // Moonshine registry `name`s ("base", "tiny") all collide with
+        // whisper and are claimed above; only the unambiguous dir_names
+        // ("moonshine-base") reach this arm in practice.
+        SetModelRoute::UnsupportedEngine("moonshine")
+    } else if is_sensevoice_model(model_name) {
+        SetModelRoute::UnsupportedEngine("sensevoice")
+    } else {
+        SetModelRoute::Whisper
     }
 }
 
 /// Set a specific model as the default (must already be downloaded)
 pub async fn set_model(model_name: &str, restart: bool) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
-    let filename = get_model_filename(model_name);
-    let model_path = models_dir.join(&filename);
 
-    // Verify the model exists
-    if !model_path.exists() {
-        print_failure(&format!("Model '{}' is not installed", model_name));
-        println!("\n  Run 'voxtype setup model' to download it first.");
-        println!("  Or 'voxtype setup model --list' to see installed models.");
-        anyhow::bail!("Model not installed: {}", model_name);
+    match set_model_route(model_name) {
+        SetModelRoute::Parakeet => {
+            let model_dir = models_dir.join(model_name);
+            if !model_dir.exists() {
+                print_failure(&format!("Model '{}' is not installed", model_name));
+                println!(
+                    "\n  Run 'voxtype setup --download --model {}' to download it first.",
+                    model_name
+                );
+                anyhow::bail!("Model not installed: {}", model_name);
+            }
+            // Writes engine = "parakeet" and [parakeet].model, and prints
+            // its own success line naming both.
+            update_config_parakeet(model_name)?;
+        }
+        SetModelRoute::UnsupportedEngine(engine) => {
+            print_failure(&format!(
+                "'{}' is a {} model; `setup model --set` cannot activate it yet",
+                model_name, engine
+            ));
+            println!(
+                "\n  Use: voxtype setup --download --model {} --activate",
+                model_name
+            );
+            println!("  Or switch engines in the TUI: voxtype configure");
+            anyhow::bail!("--set does not support {} models", engine);
+        }
+        SetModelRoute::Whisper => {
+            let filename = get_model_filename(model_name);
+            let model_path = models_dir.join(&filename);
+
+            // Verify the model exists
+            if !model_path.exists() {
+                print_failure(&format!("Model '{}' is not installed", model_name));
+                println!("\n  Run 'voxtype setup model' to download it first.");
+                println!("  Or 'voxtype setup model --list' to see installed models.");
+                anyhow::bail!("Model not installed: {}", model_name);
+            }
+
+            // Update the config
+            update_config_model(model_name)?;
+        }
     }
-
-    // Update the config
-    update_config_model(model_name)?;
 
     if restart {
         println!("  Restarting daemon...");
@@ -1661,79 +2456,21 @@ pub fn validate_parakeet_model(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Download a Parakeet model by name (public API for run_setup)
+/// Download a Parakeet model by name (public API for run_setup).
+///
+/// Routes through the unified R2 downloader (`download_artifact`). The
+/// per-engine validator runs after the download to guard against publisher
+/// errors that the sha256 check can't catch (e.g. a missing file the
+/// manifest didn't enumerate).
 pub fn download_parakeet_model(model_name: &str) -> anyhow::Result<()> {
     let model = PARAKEET_MODELS
         .iter()
         .find(|m| m.name == model_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown Parakeet model: {}", model_name))?;
 
-    download_parakeet_model_by_info(model)
-}
-
-/// Download a Parakeet model using its info struct
-fn download_parakeet_model_by_info(model: &ParakeetModelInfo) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
-    let model_path = models_dir.join(model.name);
-
-    // Create model directory
-    std::fs::create_dir_all(&model_path)?;
-
-    println!("\nDownloading {} ({} MB)...\n", model.name, model.size_mb);
-
-    for (filename, _expected_size) in model.files {
-        let file_path = model_path.join(filename);
-
-        if file_path.exists() {
-            println!("  {} already exists, skipping", filename);
-            continue;
-        }
-
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            model.huggingface_repo, filename
-        );
-
-        println!("Downloading {}...", filename);
-
-        let status = Command::new("curl")
-            .args([
-                "-L",
-                "--progress-bar",
-                "-o",
-                file_path.to_str().unwrap_or("file"),
-                &url,
-            ])
-            .status();
-
-        match status {
-            Ok(exit_status) if exit_status.success() => {
-                // Success, continue
-            }
-            Ok(exit_status) => {
-                print_failure(&format!(
-                    "Download failed: curl exited with code {}",
-                    exit_status.code().unwrap_or(-1)
-                ));
-                // Clean up partial download
-                let _ = std::fs::remove_file(&file_path);
-                anyhow::bail!("Download failed for {}", filename)
-            }
-            Err(e) => {
-                print_failure(&format!("Failed to run curl: {}", e));
-                print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
-                anyhow::bail!("curl not available: {}", e)
-            }
-        }
-    }
-
-    // Validate all files are present
-    validate_parakeet_model(&model_path)?;
-    print_success(&format!(
-        "Model '{}' downloaded to {:?}",
-        model.name, model_path
-    ));
-
+    download_artifact(model, &models_dir)?;
+    validate_parakeet_model(&models_dir.join(model.name))?;
     Ok(())
 }
 
@@ -1903,6 +2640,18 @@ pub fn valid_moonshine_model_names() -> Vec<&'static str> {
     MOONSHINE_MODELS.iter().map(|m| m.name).collect()
 }
 
+/// Directory name for a Moonshine model.
+///
+/// Moonshine, like SenseVoice, uses short config values (`base`) while the
+/// on-disk directory carries the engine prefix (`moonshine-base`). Anything
+/// looking for the files needs this mapping, not the config value.
+pub fn moonshine_dir_name(name: &str) -> Option<&'static str> {
+    MOONSHINE_MODELS
+        .iter()
+        .find(|m| m.name == name || m.dir_name == name)
+        .map(|m| m.dir_name)
+}
+
 /// Validate that a Moonshine model directory has the required files
 pub fn validate_moonshine_model(path: &Path) -> anyhow::Result<()> {
     if !path.exists() {
@@ -1933,82 +2682,20 @@ pub fn validate_moonshine_model(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Download a Moonshine model by name (public API for run_setup)
+/// Download a Moonshine model by name (public API for run_setup).
+///
+/// Routes through the unified R2 downloader; per-engine validator runs
+/// after to guard against publisher errors that the sha256 check can't
+/// catch.
 pub fn download_moonshine_model(model_name: &str) -> anyhow::Result<()> {
     let model = MOONSHINE_MODELS
         .iter()
         .find(|m| m.name == model_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown Moonshine model: {}", model_name))?;
 
-    download_moonshine_model_by_info(model)
-}
-
-/// Download a Moonshine model using its info struct
-fn download_moonshine_model_by_info(model: &MoonshineModelInfo) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
-    let model_path = models_dir.join(model.dir_name);
-
-    // Create model directory
-    std::fs::create_dir_all(&model_path)?;
-
-    println!(
-        "\nDownloading {} ({} MB)...\n",
-        model.dir_name, model.size_mb
-    );
-
-    for (repo_path, local_filename) in model.files {
-        let file_path = model_path.join(local_filename);
-
-        if file_path.exists() {
-            println!("  {} already exists, skipping", local_filename);
-            continue;
-        }
-
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            model.huggingface_repo, repo_path
-        );
-
-        println!("Downloading {}...", local_filename);
-
-        let status = Command::new("curl")
-            .args([
-                "-L",
-                "--progress-bar",
-                "-o",
-                file_path.to_str().unwrap_or("file"),
-                &url,
-            ])
-            .status();
-
-        match status {
-            Ok(exit_status) if exit_status.success() => {
-                // Success, continue
-            }
-            Ok(exit_status) => {
-                print_failure(&format!(
-                    "Download failed: curl exited with code {}",
-                    exit_status.code().unwrap_or(-1)
-                ));
-                // Clean up partial download
-                let _ = std::fs::remove_file(&file_path);
-                anyhow::bail!("Download failed for {}", local_filename)
-            }
-            Err(e) => {
-                print_failure(&format!("Failed to run curl: {}", e));
-                print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
-                anyhow::bail!("curl not available: {}", e)
-            }
-        }
-    }
-
-    // Validate all files are present
-    validate_moonshine_model(&model_path)?;
-    print_success(&format!(
-        "Model '{}' downloaded to {:?}",
-        model.dir_name, model_path
-    ));
-
+    download_artifact(model, &models_dir)?;
+    validate_moonshine_model(&models_dir.join(model.dir_name))?;
     Ok(())
 }
 
@@ -2055,23 +2742,18 @@ pub fn validate_cohere_model(path: &Path) -> anyhow::Result<()> {
 }
 
 /// Download a Cohere model by name (public API for run_setup).
+///
+/// Cohere is the largest artifact voxtype ships (up to ~4 GB across a
+/// handful of files). We print a size + disk headroom estimate before
+/// the unified downloader takes over so users don't wonder why their
+/// disk is filling.
 pub fn download_cohere_model(model_name: &str) -> anyhow::Result<()> {
     let model = COHERE_MODELS
         .iter()
         .find(|m| m.name == model_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown Cohere model: {}", model_name))?;
-    download_cohere_model_by_info(model)
-}
-
-/// Download a Cohere model using its info struct.
-fn download_cohere_model_by_info(model: &CohereModelInfo) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
     let model_path = models_dir.join(model.dir_name);
-    std::fs::create_dir_all(&model_path)?;
-
-    // Cohere is a multi-GB download. Even with a fast connection it's a
-    // visible commitment, and on slow links it can mean 30+ minutes. Print
-    // the size up front so users don't wonder why their disk is filling.
     println!(
         "\nDownloading {} ({} MB across {} files)...",
         model.dir_name,
@@ -2085,56 +2767,8 @@ fn download_cohere_model_by_info(model: &CohereModelInfo) -> anyhow::Result<()> 
         model.size_mb + (model.size_mb / 10),
         model_path.display(),
     );
-
-    for (repo_path, local_filename) in model.files {
-        let file_path = model_path.join(local_filename);
-
-        if file_path.exists() {
-            println!("  {} already exists, skipping", local_filename);
-            continue;
-        }
-
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            model.huggingface_repo, repo_path
-        );
-
-        println!("Downloading {}...", local_filename);
-
-        let status = Command::new("curl")
-            .args([
-                "-L",
-                "--progress-bar",
-                "-o",
-                file_path.to_str().unwrap_or("file"),
-                &url,
-            ])
-            .status();
-
-        match status {
-            Ok(exit_status) if exit_status.success() => {}
-            Ok(exit_status) => {
-                print_failure(&format!(
-                    "Download failed: curl exited with code {}",
-                    exit_status.code().unwrap_or(-1)
-                ));
-                let _ = std::fs::remove_file(&file_path);
-                anyhow::bail!("Download failed for {}", local_filename)
-            }
-            Err(e) => {
-                print_failure(&format!("Failed to run curl: {}", e));
-                print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
-                anyhow::bail!("curl not available: {}", e)
-            }
-        }
-    }
-
+    download_artifact(model, &models_dir)?;
     validate_cohere_model(&model_path)?;
-    print_success(&format!(
-        "Model '{}' downloaded to {:?}",
-        model.dir_name, model_path
-    ));
-
     Ok(())
 }
 
@@ -2196,7 +2830,8 @@ async fn handle_cohere_selection(selection: usize) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    download_cohere_model_by_info(model)?;
+    download_artifact(model, &Config::models_dir())?;
+    validate_cohere_model(&Config::models_dir().join(model.dir_name))?;
     update_config_cohere(model.dir_name)?;
     restart_daemon_if_running().await;
     Ok(())
@@ -2436,7 +3071,8 @@ async fn handle_sensevoice_selection(selection: usize) -> anyhow::Result<()> {
     }
 
     // Download the model
-    download_sensevoice_model_by_info(model)?;
+    download_artifact(model, &Config::models_dir())?;
+    validate_sensevoice_model(&Config::models_dir().join(model.dir_name))?;
 
     // Update config and restart daemon
     update_config_sensevoice(model.name)?;
@@ -2497,22 +3133,36 @@ pub fn list_installed_moonshine() {
 // SenseVoice Model Functions
 // =============================================================================
 
+/// Look up a SenseVoice model by its config name (`small`) or its directory
+/// name (`sensevoice-small`).
+///
+/// The directory form exists because `small` also names a Whisper model and
+/// Whisper wins that collision in `voxtype setup --model`.
+fn find_sensevoice_model(name: &str) -> Option<&'static SenseVoiceModelInfo> {
+    SENSEVOICE_MODELS
+        .iter()
+        .find(|m| m.name == name || m.dir_name == name)
+}
+
 /// Check if a model name is a SenseVoice model
 pub fn is_sensevoice_model(name: &str) -> bool {
-    SENSEVOICE_MODELS.iter().any(|m| m.name == name)
+    find_sensevoice_model(name).is_some()
 }
 
 /// Get the directory name for a SenseVoice model
 pub fn sensevoice_dir_name(name: &str) -> Option<&'static str> {
-    SENSEVOICE_MODELS
-        .iter()
-        .find(|m| m.name == name)
-        .map(|m| m.dir_name)
+    find_sensevoice_model(name).map(|m| m.dir_name)
 }
 
 /// Get list of valid SenseVoice model names
 pub fn valid_sensevoice_model_names() -> Vec<&'static str> {
     SENSEVOICE_MODELS.iter().map(|m| m.name).collect()
+}
+
+/// SenseVoice names to show for `voxtype setup --model`. Uses the directory
+/// form so the suggestion can't be swallowed by the Whisper table.
+pub fn sensevoice_setup_model_names() -> Vec<&'static str> {
+    SENSEVOICE_MODELS.iter().map(|m| m.dir_name).collect()
 }
 
 /// Validate that a SenseVoice model directory has the required files
@@ -2541,81 +3191,17 @@ pub fn validate_sensevoice_model(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Download a SenseVoice model by name (public API for run_setup)
+/// Download a SenseVoice model by name (public API for run_setup).
+///
+/// Routes through the unified R2 downloader; per-engine validator runs
+/// after to guard against publisher errors the sha256 check can't catch.
 pub fn download_sensevoice_model(model_name: &str) -> anyhow::Result<()> {
-    let model = SENSEVOICE_MODELS
-        .iter()
-        .find(|m| m.name == model_name)
+    let model = find_sensevoice_model(model_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown SenseVoice model: {}", model_name))?;
 
-    download_sensevoice_model_by_info(model)
-}
-
-/// Download a SenseVoice model using its info struct
-fn download_sensevoice_model_by_info(model: &SenseVoiceModelInfo) -> anyhow::Result<()> {
     let models_dir = Config::models_dir();
-    let model_path = models_dir.join(model.dir_name);
-
-    // Create model directory
-    std::fs::create_dir_all(&model_path)?;
-
-    println!(
-        "\nDownloading {} ({} MB)...\n",
-        model.dir_name, model.size_mb
-    );
-
-    for (repo_path, local_filename) in model.files {
-        let file_path = model_path.join(local_filename);
-
-        if file_path.exists() {
-            println!("  {} already exists, skipping", local_filename);
-            continue;
-        }
-
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            model.huggingface_repo, repo_path
-        );
-
-        println!("Downloading {}...", local_filename);
-
-        let status = Command::new("curl")
-            .args([
-                "-L",
-                "--progress-bar",
-                "-o",
-                file_path.to_str().unwrap_or("file"),
-                &url,
-            ])
-            .status();
-
-        match status {
-            Ok(exit_status) if exit_status.success() => {
-                // Success, continue
-            }
-            Ok(exit_status) => {
-                print_failure(&format!(
-                    "Download failed: curl exited with code {}",
-                    exit_status.code().unwrap_or(-1)
-                ));
-                let _ = std::fs::remove_file(&file_path);
-                anyhow::bail!("Download failed for {}", local_filename)
-            }
-            Err(e) => {
-                print_failure(&format!("Failed to run curl: {}", e));
-                print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
-                anyhow::bail!("curl not available: {}", e)
-            }
-        }
-    }
-
-    // Validate all files are present
-    validate_sensevoice_model(&model_path)?;
-    print_success(&format!(
-        "Model '{}' downloaded to {:?}",
-        model.dir_name, model_path
-    ));
-
+    download_artifact(model, &models_dir)?;
+    validate_sensevoice_model(&models_dir.join(model.dir_name))?;
     Ok(())
 }
 
@@ -2785,11 +3371,16 @@ fn validate_onnx_ctc_model(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Generic handler for ONNX engine model selection (download/config/restart)
-#[allow(clippy::type_complexity)]
-async fn handle_onnx_engine_selection(
+/// Generic handler for ONNX engine model selection (download/config/restart).
+///
+/// `models` is a slice of any type implementing `ModelArtifact` plus the
+/// engine's `name` (config key, which can differ from the artifact's
+/// `name()` / on-disk directory for the legacy paraformer/dolphin/omni
+/// engines where the config short-name doesn't match the directory). The
+/// caller pairs each artifact with its short name.
+async fn handle_onnx_engine_selection<T: ModelArtifact>(
     engine_name: &str,
-    models: Vec<(&str, &str, u32, &[(&str, &str)], &str)>,
+    models: &[(&str, &T)],
     selection: usize,
     validate_fn: fn(&Path) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
@@ -2800,12 +3391,12 @@ async fn handle_onnx_engine_selection(
         return Ok(());
     }
 
-    let (name, dir_name, size_mb, files, repo) = &models[selection - 1];
-    let model_path = models_dir.join(dir_name);
+    let (short_name, artifact) = models[selection - 1];
+    let model_path = models_dir.join(artifact.name());
 
     // Check if already installed
     if model_path.exists() && validate_fn(&model_path).is_ok() {
-        println!("\nModel '{}' is already installed.\n", dir_name);
+        println!("\nModel '{}' is already installed.\n", artifact.name());
         println!("  [1] Set as default model (update config)");
         println!("  [2] Re-download");
         println!("  [0] Cancel\n");
@@ -2819,7 +3410,7 @@ async fn handle_onnx_engine_selection(
 
         match choice {
             "" | "1" => {
-                update_config_engine(engine_name, name)?;
+                update_config_engine(engine_name, short_name)?;
                 restart_daemon_if_running().await;
                 return Ok(());
             }
@@ -2833,76 +3424,16 @@ async fn handle_onnx_engine_selection(
         }
     }
 
-    // Download the model
-    download_onnx_model(dir_name, *size_mb, files, repo)?;
+    // Download via the unified R2 downloader.
+    download_artifact(artifact, &models_dir)?;
 
-    // Validate
+    // Per-engine on-disk validation (catches publisher-side omissions the
+    // manifest's sha256 verification can't surface).
     validate_fn(&model_path)?;
-    print_success(&format!(
-        "Model '{}' downloaded to {:?}",
-        dir_name, model_path
-    ));
 
     // Update config and restart daemon
-    update_config_engine(engine_name, name)?;
+    update_config_engine(engine_name, short_name)?;
     restart_daemon_if_running().await;
-
-    Ok(())
-}
-
-/// Download an ONNX model from HuggingFace
-fn download_onnx_model(
-    dir_name: &str,
-    size_mb: u32,
-    files: &[(&str, &str)],
-    repo: &str,
-) -> anyhow::Result<()> {
-    let models_dir = Config::models_dir();
-    let model_path = models_dir.join(dir_name);
-
-    std::fs::create_dir_all(&model_path)?;
-
-    println!("\nDownloading {} ({} MB)...\n", dir_name, size_mb);
-
-    for (repo_path, local_filename) in files {
-        let file_path = model_path.join(local_filename);
-
-        if file_path.exists() {
-            println!("  {} already exists, skipping", local_filename);
-            continue;
-        }
-
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, repo_path);
-
-        println!("Downloading {}...", local_filename);
-
-        let status = Command::new("curl")
-            .args([
-                "-L",
-                "--progress-bar",
-                "-o",
-                file_path.to_str().unwrap_or("file"),
-                &url,
-            ])
-            .status();
-
-        match status {
-            Ok(exit_status) if exit_status.success() => {}
-            Ok(exit_status) => {
-                print_failure(&format!(
-                    "Download failed: curl exited with code {}",
-                    exit_status.code().unwrap_or(-1)
-                ));
-                let _ = std::fs::remove_file(&file_path);
-                anyhow::bail!("Download failed for {}", local_filename)
-            }
-            Err(e) => {
-                print_failure(&format!("Failed to run curl: {}", e));
-                print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
-                anyhow::bail!("curl not available: {}", e)
-            }
-        }
-    }
 
     Ok(())
 }
@@ -3236,6 +3767,35 @@ mode = "type"
         assert!(result.contains("[whisper]"));
         assert!(result.contains("[hotkey]"));
         assert!(result.contains("[output]"));
+    }
+
+    /// Regression for #610: `setup model --set <parakeet-model>` routed to
+    /// the whisper config writer, which hard-codes `engine = "whisper"` and
+    /// produced a crash-looping config while reporting success. Known
+    /// Parakeet names must route to the Parakeet writer; known models of
+    /// engines --set can't activate must be refused; everything else (bare
+    /// whisper names, .bin paths) stays on the Whisper writer.
+    #[test]
+    fn set_model_routes_by_engine() {
+        assert_eq!(
+            set_model_route("parakeet-tdt-0.6b-v3"),
+            SetModelRoute::Parakeet
+        );
+        assert_eq!(
+            set_model_route("parakeet-unified-en-0.6b"),
+            SetModelRoute::Parakeet
+        );
+        // "small" is BOTH a whisper name and a SenseVoice registry name;
+        // whisper has owned it in --set since before SenseVoice existed.
+        assert_eq!(set_model_route("small"), SetModelRoute::Whisper);
+        assert_eq!(
+            set_model_route("/home/user/models/ggml-custom.bin"),
+            SetModelRoute::Whisper
+        );
+        assert_eq!(
+            set_model_route("moonshine-base"),
+            SetModelRoute::UnsupportedEngine("moonshine")
+        );
     }
 
     #[test]
@@ -3612,5 +4172,369 @@ mode = "type"
         let msg = err.to_string();
         assert!(msg.contains("encoder_model.onnx"), "got: {}", msg);
         assert!(msg.contains("tokenizer.json"), "got: {}", msg);
+    }
+
+    // =========================================================================
+    // ModelArtifact trait impl coverage
+    // =========================================================================
+    //
+    // The runtime downloader and the mirror script both route off
+    // `engine_prefix()`. A typo in one impl would silently send downloads to
+    // the wrong R2 namespace, so we lock the value of each impl in.
+
+    #[test]
+    fn parakeet_engine_prefix() {
+        for m in PARAKEET_MODELS {
+            assert_eq!(m.engine_prefix(), "parakeet");
+            assert_eq!(m.name(), m.name); // sanity
+            assert_eq!(m.upstream_repo(), m.huggingface_repo);
+            assert_eq!(m.expected_files().len(), m.files.len());
+        }
+    }
+
+    #[test]
+    fn moonshine_engine_prefix() {
+        for m in MOONSHINE_MODELS {
+            assert_eq!(m.engine_prefix(), "moonshine");
+            assert_eq!(m.name(), m.dir_name);
+            assert_eq!(m.expected_files().len(), m.files.len());
+        }
+    }
+
+    #[test]
+    fn sensevoice_engine_prefix() {
+        for m in SENSEVOICE_MODELS {
+            assert_eq!(m.engine_prefix(), "sensevoice");
+            assert_eq!(m.name(), m.dir_name);
+        }
+    }
+
+    #[test]
+    fn paraformer_engine_prefix() {
+        for m in PARAFORMER_MODELS {
+            assert_eq!(m.engine_prefix(), "paraformer");
+            assert_eq!(m.name(), m.dir_name);
+        }
+    }
+
+    #[test]
+    fn dolphin_engine_prefix() {
+        for m in DOLPHIN_MODELS {
+            assert_eq!(m.engine_prefix(), "dolphin");
+            assert_eq!(m.name(), m.dir_name);
+        }
+    }
+
+    #[test]
+    fn omnilingual_engine_prefix() {
+        for m in OMNILINGUAL_MODELS {
+            assert_eq!(m.engine_prefix(), "omnilingual");
+            assert_eq!(m.name(), m.dir_name);
+        }
+    }
+
+    #[test]
+    fn cohere_engine_prefix() {
+        for m in COHERE_MODELS {
+            assert_eq!(m.engine_prefix(), "cohere");
+            assert_eq!(m.name(), m.dir_name);
+        }
+    }
+
+    /// The `.part` name has to be one no installed-model check can match:
+    /// dot-prefixed (so directory listings treat it as hidden) and suffixed
+    /// (so an exact-name lookup misses it).
+    #[test]
+    fn part_paths_are_hidden_siblings_of_the_destination() {
+        let part = part_path(Path::new("/models/ggml-base.bin"));
+        assert_eq!(part, Path::new("/models/.ggml-base.bin.part"));
+        assert_eq!(part.parent(), Path::new("/models/ggml-base.bin").parent());
+        assert_ne!(part, Path::new("/models/ggml-base.bin"));
+
+        // Nested ONNX layouts keep the file's own directory.
+        assert_eq!(
+            part_path(Path::new("/models/moonshine-tiny/onnx/encoder.onnx")),
+            Path::new("/models/moonshine-tiny/onnx/.encoder.onnx.part")
+        );
+    }
+
+    /// Whisper is the one engine with no published sha256, so these two checks
+    /// are all that stand between a bad transfer and a model the daemon can't
+    /// load.
+    #[test]
+    fn whisper_validation_catches_truncated_and_non_model_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let good = dir.path().join("good.bin");
+        let mut bytes = GGML_MAGIC.to_vec();
+        bytes.extend_from_slice(&[0u8; 60]);
+        std::fs::write(&good, &bytes).unwrap();
+        validate_download(&good, Some(bytes.len() as u64), ContentCheck::Ggml).unwrap();
+        // Without a Content-Length the magic check still applies.
+        validate_download(&good, None, ContentCheck::Ggml).unwrap();
+
+        let short = dir.path().join("short.bin");
+        std::fs::write(&short, &bytes[..32]).unwrap();
+        let err =
+            validate_download(&short, Some(bytes.len() as u64), ContentCheck::Ggml).unwrap_err();
+        assert!(
+            err.to_string().contains("incomplete download"),
+            "got: {}",
+            err
+        );
+
+        // What a 404 actually leaves on disk when curl has no --fail.
+        let html = dir.path().join("error.bin");
+        std::fs::write(&html, b"<!DOCTYPE html><html><body>404").unwrap();
+        let err = validate_download(&html, None, ContentCheck::Ggml).unwrap_err();
+        assert!(err.to_string().contains("not a ggml model"), "got: {}", err);
+
+        let empty = dir.path().join("empty.bin");
+        std::fs::write(&empty, b"").unwrap();
+        let err = validate_download(&empty, None, ContentCheck::Ggml).unwrap_err();
+        assert!(err.to_string().contains("empty"), "got: {}", err);
+    }
+
+    /// The whole staging sequence, offline: bytes land on the `.part` path,
+    /// the destination stays absent until validation passes, and the promote
+    /// is what makes the model visible.
+    /// The download tests drive the real curl path with `file://` URLs. Nix
+    /// builds run in a hermetic sandbox with no curl on PATH, where these
+    /// would fail for a reason unrelated to what they cover. Two of them
+    /// assert that a download *fails*, so without this guard they would pass
+    /// in the sandbox for the wrong reason.
+    fn curl_available() -> bool {
+        which::which("curl").is_ok()
+    }
+
+    #[test]
+    fn a_download_only_reaches_its_final_name_after_validation() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let mut bytes = GGML_MAGIC.to_vec();
+        bytes.extend_from_slice(&[7u8; 128]);
+        std::fs::write(&source, &bytes).unwrap();
+
+        let dest = dir.path().join("ggml-test.bin");
+        let url = format!("file://{}", source.display());
+        let part = download_to_part(&url, &dest, "test", "ggml-test.bin", None).unwrap();
+
+        assert_eq!(part, part_path(&dest));
+        assert!(part.exists(), "bytes should land on the part file");
+        assert!(
+            !dest.exists(),
+            "the destination must stay absent until the download is validated"
+        );
+
+        validate_download(&part, Some(bytes.len() as u64), ContentCheck::Ggml).unwrap();
+        promote_part(&part, &dest).unwrap();
+
+        assert!(dest.exists(), "promote should publish the download");
+        assert!(!part.exists(), "the part file should be consumed");
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    }
+
+    /// A non-zero curl exit is an error, and nothing is left behind: not at
+    /// the destination (where an installed-model check would find it) and not
+    /// as a stale part file.
+    ///
+    /// Uses a `file://` URL for a source that doesn't exist, so the failure is
+    /// reproducible without a network.
+    #[test]
+    fn a_failed_json_download_bails_and_removes_the_partial_file() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
+        let _json = progress::json_mode_for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("model.bin");
+        let url = format!("file://{}", dir.path().join("no-such-source.bin").display());
+
+        let err = download_to_part(&url, &dest, "test-model", "model.bin", Some(1024))
+            .expect_err("a missing source must not report success");
+
+        assert!(
+            err.to_string().contains("Download failed"),
+            "unexpected error: {}",
+            err
+        );
+        assert!(!dest.exists(), "nothing may appear at the final path");
+        assert!(
+            !part_path(&dest).exists(),
+            "partial download should be cleaned up"
+        );
+    }
+
+    /// Same guarantee on the human path, which reaches curl through a
+    /// different call and used to download straight onto the final name.
+    #[test]
+    fn a_failed_human_download_leaves_neither_file() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("model.bin");
+        let url = format!("file://{}", dir.path().join("no-such-source.bin").display());
+
+        assert!(
+            curl_download(&url, &dest).is_err(),
+            "a missing source must not report success"
+        );
+        assert!(!dest.exists(), "nothing may appear at the final path");
+        assert!(!part_path(&dest).exists(), "part file should be cleaned up");
+    }
+
+    /// The whisper path end to end against the real host: the `HEAD` that
+    /// sizes the transfer, the ggml magic check, and the rename. Downloads
+    /// into a temp dir, so it never touches the user's models directory.
+    ///
+    /// ```text
+    /// cargo test --lib whisper_download_is_atomic -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "downloads a model from huggingface.co"]
+    fn whisper_download_is_atomic_end_to_end() {
+        if !curl_available() {
+            eprintln!("skipping: curl is not on PATH");
+            return;
+        }
+        let _json = progress::json_mode_for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("ggml-tiny.en.bin");
+
+        download_atomically(
+            &get_model_url("tiny.en"),
+            &dest,
+            "tiny.en",
+            ContentCheck::Ggml,
+        )
+        .expect("tiny.en should download");
+
+        assert!(dest.exists(), "the model should be in place");
+        assert!(!part_path(&dest).exists(), "no part file should survive");
+        // Whatever landed passed the magic check, so re-reading it is a
+        // check that the promote moved the validated bytes.
+        validate_download(
+            &dest,
+            content_length(&get_model_url("tiny.en")),
+            ContentCheck::Ggml,
+        )
+        .unwrap();
+    }
+
+    /// Multi-file models must report progress per file, and the `file` field
+    /// has to name the file being fetched rather than the model.
+    ///
+    /// Ignored so `cargo test` stays offline; this one really downloads a
+    /// model (~113 MB, into a temp dir that is deleted afterwards):
+    ///
+    /// ```text
+    /// cargo test --lib json_progress -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "downloads a model from models.voxtype.io"]
+    fn json_progress_covers_every_file_of_a_multi_file_model() {
+        let _json = progress::json_mode_for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let model = MOONSHINE_MODELS
+            .iter()
+            .find(|m| m.dir_name == "moonshine-tiny")
+            .unwrap();
+
+        download_artifact(model, dir.path()).expect("moonshine-tiny should download");
+
+        // Moonshine reports `size: 0` in `expected_files()` (the manifest is
+        // authoritative for sizes), so check the files landed rather than
+        // comparing against a placeholder.
+        for expected in model.expected_files() {
+            let path = dir.path().join("moonshine-tiny").join(&expected.path);
+            let len = std::fs::metadata(&path)
+                .unwrap_or_else(|e| panic!("{} missing: {}", expected.path, e))
+                .len();
+            assert!(len > 0, "{} downloaded empty", expected.path);
+        }
+
+        // The download leaves the publisher's manifest behind, which is what
+        // both integrity tiers read. Exercise them against real R2 data.
+        use crate::model_catalog::{
+            model_health_in, verify_model_in, ModelHealth, ModelVerification,
+        };
+        let model_dir = dir.path().join("moonshine-tiny");
+        assert!(
+            super::super::manifest::cached_manifest_path(&model_dir).exists(),
+            "the download should record its manifest"
+        );
+        assert_eq!(
+            model_health_in(dir.path(), "moonshine", "moonshine-tiny"),
+            ModelHealth::Present
+        );
+        assert_eq!(
+            verify_model_in(dir.path(), "moonshine", "moonshine-tiny"),
+            ModelVerification::Ok,
+            "every file should match the manifest it was downloaded against"
+        );
+
+        // Truncating one file has to surface in both tiers.
+        std::fs::write(model_dir.join("tokenizer.json"), b"{}").unwrap();
+        assert!(matches!(
+            model_health_in(dir.path(), "moonshine", "moonshine-tiny"),
+            ModelHealth::Corrupt(_)
+        ));
+        assert!(matches!(
+            verify_model_in(dir.path(), "moonshine", "moonshine-tiny"),
+            ModelVerification::Corrupt(_)
+        ));
+    }
+
+    /// The write that `--download` used to perform behind the user's back.
+    /// Kept as a test because the helper is still reachable from the flows
+    /// where selecting a model is the point (`setup model`, the macOS wizard),
+    /// and it silently rewrites both `engine` and `[parakeet] model`.
+    #[test]
+    fn activating_a_parakeet_model_rewrites_engine_and_model() {
+        let before = "\
+# Voxtype Configuration
+engine = \"whisper\"
+
+[whisper]
+model = \"base.en\"
+
+[parakeet]
+model = \"parakeet-tdt-0.6b-v3-int8\"
+on_demand_loading = false
+";
+        let after = update_parakeet_in_config(before, "parakeet-tdt-0.6b-v2-int8");
+        assert!(after.contains("engine = \"parakeet\""), "{}", after);
+        assert!(
+            after.contains("model = \"parakeet-tdt-0.6b-v2-int8\""),
+            "{}",
+            after
+        );
+        assert!(
+            !after.contains("parakeet-tdt-0.6b-v3-int8"),
+            "the previous selection should be replaced: {}",
+            after
+        );
+        // Untouched sections survive.
+        assert!(after.contains("[whisper]") && after.contains("model = \"base.en\""));
+    }
+
+    #[test]
+    fn sha256_file_matches_known_vector() {
+        // sha256 of "hello world" (no trailing newline)
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("payload");
+        std::fs::write(&path, b"hello world").unwrap();
+        let got = sha256_file(&path).unwrap();
+        assert_eq!(
+            got,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 }

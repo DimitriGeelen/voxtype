@@ -1,6 +1,7 @@
 //! TUI application state.
 
 use crate::setup::binary::{self, Acceleration, EngineFamily, InstallKind, Inventory, Variant};
+use crate::setup::variant_check::{self, VariantMismatch};
 use std::path::Path;
 
 use super::advanced_section::AdvancedState;
@@ -28,7 +29,8 @@ pub enum Action {
     ForceQuit,
     /// Move /usr/bin/voxtype to the named variant via pkexec.
     SwitchVariant(Variant),
-    /// Run `voxtype setup model <model>` to download a missing model. The
+    /// Run `voxtype setup --download --model <model>` to download a missing
+    /// model. The
     /// engine name is included only for human-readable feedback.
     DownloadModel {
         engine: String,
@@ -89,6 +91,22 @@ pub struct App {
     /// model name so the General banner can prompt the user to fetch it.
     /// Computed at load time and on `refresh_inventory()`.
     pub missing_model: Option<MissingModel>,
+    /// `Some` when the configured engine isn't available in the running
+    /// binary's compiled features (e.g. config says `engine = "parakeet"`
+    /// but `/usr/bin/voxtype` dispatches to the CPU Whisper variant). When
+    /// present, every section renders a persistent red banner above its
+    /// content pointing the user at the recovery path. Computed at load
+    /// time and on `refresh_inventory()`. See #450.
+    pub variant_mismatch: Option<VariantMismatch>,
+    /// Modification time of config.toml as of the last moment the daemon
+    /// was known to be in sync with it: TUI startup, or the most recent
+    /// `restart_voxtype_daemon` call. Compared on quit — a newer mtime
+    /// means a save landed that the running daemon has not loaded, so the
+    /// TUI restarts it on the way out. Without this, a config-only change
+    /// (e.g. switching engine on a binary that supports both) saved and
+    /// quit cleanly but never took effect, while variant switches and
+    /// model downloads restarted immediately.
+    pub config_synced_mtime: Option<std::time::SystemTime>,
     /// Lazily loaded Hotkey section state. None until the user opens Hotkey
     /// for the first time (or load fails).
     pub hotkey: Option<HotkeyState>,
@@ -159,6 +177,7 @@ impl App {
     pub fn new(force_package_mode: bool) -> Self {
         let inventory = build_inventory(force_package_mode);
         let cursor = initial_cursor(&inventory);
+        let variant_mismatch = detect_variant_mismatch(&inventory);
         Self {
             inventory,
             cursor,
@@ -172,6 +191,8 @@ impl App {
             help_open: false,
             quit_pending: false,
             missing_model: detect_missing_model(),
+            variant_mismatch,
+            config_synced_mtime: config_file_mtime(),
             hotkey: None,
             audio: None,
             engine: None,
@@ -242,6 +263,19 @@ impl App {
         }
     }
 
+    /// Direct-navigate to a specific section, bypassing the sidebar cursor.
+    /// Used by F2 (jump to General to fix a variant mismatch), and a fine
+    /// hook for future "Press X to fix" cross-section affordances. Focuses
+    /// the content pane so the user can act immediately on arrival.
+    pub fn jump_to_section(&mut self, section: Section) {
+        self.current_section = section;
+        if let Some(idx) = Section::ALL.iter().position(|s| *s == section) {
+            self.sidebar_cursor = idx;
+        }
+        self.sidebar_focused = false;
+        self.ensure_section_loaded();
+    }
+
     pub fn focus_sidebar(&mut self) {
         self.sidebar_focused = true;
         // Keep cursor in sync with the active section so the user lands on the
@@ -272,6 +306,7 @@ impl App {
         self.inventory = build_inventory(self.force_package_mode);
         self.daemon_running = is_daemon_running();
         self.missing_model = detect_missing_model();
+        self.variant_mismatch = detect_variant_mismatch(&self.inventory);
     }
 
     /// True when at least one section state has been loaded — the user has
@@ -378,7 +413,7 @@ impl App {
         self.refresh_inventory();
     }
 
-    /// Record the outcome of a `voxtype setup model` invocation onto the
+    /// Record the outcome of a model download invocation onto the
     /// same banner the variant-switch reuses, so the user sees it on the
     /// General screen the next time they focus it.
     pub fn record_download_attempt(
@@ -416,6 +451,17 @@ fn initial_cursor(inv: &Inventory) -> (usize, usize) {
     }
 }
 
+/// Compute the engine-vs-running-binary mismatch (see #450). Loads the
+/// config from its default path; returns `None` if config can't be loaded
+/// (we don't want a config parse error to prevent the TUI from opening,
+/// since the user opened it specifically to fix configuration). The
+/// inventory is borrowed from `App` so the call doesn't re-walk
+/// `/usr/lib/voxtype/` on every refresh.
+fn detect_variant_mismatch(inventory: &Inventory) -> Option<VariantMismatch> {
+    let cfg = crate::config::load_config(None).ok()?;
+    variant_check::detect_mismatch(&cfg, inventory)
+}
+
 /// Detect whether the configured engine's active model file is on disk.
 /// Returns the engine + model name + a setup command hint when it's missing,
 /// or None when the model is present (or we can't determine it).
@@ -424,16 +470,18 @@ fn detect_missing_model() -> Option<MissingModel> {
     let cfg = config::load_config(None).ok()?;
     let dir = config::Config::models_dir();
     let (engine_name, model, setup_command) = match cfg.engine {
-        config::TranscriptionEngine::Whisper => {
-            ("whisper", cfg.whisper.model.clone(), "voxtype setup model")
-        }
+        config::TranscriptionEngine::Whisper => (
+            "whisper",
+            cfg.whisper.model.clone(),
+            "voxtype setup --download",
+        ),
         config::TranscriptionEngine::Parakeet => (
             "parakeet",
             cfg.parakeet
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Moonshine => (
             "moonshine",
@@ -441,7 +489,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::SenseVoice => (
             "sensevoice",
@@ -449,7 +497,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Paraformer => (
             "paraformer",
@@ -457,7 +505,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Dolphin => (
             "dolphin",
@@ -465,7 +513,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         config::TranscriptionEngine::Omnilingual => (
             "omnilingual",
@@ -473,7 +521,7 @@ fn detect_missing_model() -> Option<MissingModel> {
                 .as_ref()
                 .map(|c| c.model.clone())
                 .unwrap_or_default(),
-            "voxtype setup model",
+            "voxtype setup --download",
         ),
         // Cohere — checked but model layout differs by rc/0.7.0; skip the
         // disk probe rather than emit a false-positive missing warning.
@@ -502,25 +550,57 @@ fn detect_missing_model() -> Option<MissingModel> {
         })
     }
 }
+use crate::daemon_status::is_daemon_running;
 
-/// Mirrors the check in main.rs; we duplicate it here to avoid a circular
-/// dependency on a private helper.
-fn is_daemon_running() -> bool {
-    let pid_path = crate::config::Config::runtime_dir().join("pid");
-    let pid_str = match std::fs::read_to_string(&pid_path) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let pid: u32 = match pid_str.trim().parse() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    std::path::Path::new(&format!("/proc/{}", pid)).exists()
+/// Modification time of the config file the TUI edits (the same
+/// `Config::default_path()` every section's `ConfigEditor::load()` writes
+/// to). `None` when the path can't be resolved or the file doesn't exist.
+pub fn config_file_mtime() -> Option<std::time::SystemTime> {
+    let path = crate::config::Config::default_path()?;
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+/// Should quitting the TUI restart the daemon?
+///
+/// Yes exactly when a daemon is alive and the config file changed after the
+/// last known daemon (re)start — the running process is stale with respect
+/// to what the user saved. A stopped daemon needs no restart (the next start
+/// reads the new config, and `systemctl restart` on a stopped service would
+/// start it, which the user didn't ask for). `current` being `None` means
+/// the config file doesn't exist, so there is nothing new to load.
+pub fn should_restart_on_quit(
+    daemon_running: bool,
+    synced: Option<std::time::SystemTime>,
+    current: Option<std::time::SystemTime>,
+) -> bool {
+    daemon_running && current.is_some() && current != synced
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: an engine change saved through the TUI never took effect
+    /// because quitting didn't restart the daemon. Quit must restart exactly
+    /// when a daemon is alive and the config was saved after the daemon's
+    /// last known (re)start.
+    #[test]
+    fn quit_restarts_only_a_running_daemon_with_a_newer_config() {
+        use std::time::{Duration, SystemTime};
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let t1 = t0 + Duration::from_secs(60);
+
+        // Saved after startup, daemon running: restart.
+        assert!(should_restart_on_quit(true, Some(t0), Some(t1)));
+        // Config file created during the session (didn't exist at startup).
+        assert!(should_restart_on_quit(true, None, Some(t1)));
+        // Untouched config: no restart.
+        assert!(!should_restart_on_quit(true, Some(t0), Some(t0)));
+        // Daemon not running: never restart (it would *start* the service).
+        assert!(!should_restart_on_quit(false, Some(t0), Some(t1)));
+        // No config file at all: nothing new for a daemon to load.
+        assert!(!should_restart_on_quit(true, Some(t0), None));
+    }
 
     #[test]
     fn variant_at_finds_known_pairs() {

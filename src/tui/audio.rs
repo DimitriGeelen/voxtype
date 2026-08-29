@@ -1,6 +1,5 @@
-//! Audio settings: input device, max duration, feedback sounds, MPRIS pause.
+//! Audio settings: input device, max duration, media behavior, feedback sounds.
 
-use cpal::traits::{DeviceTrait, HostTrait};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
@@ -15,12 +14,15 @@ use super::common::{
     self, FeedbackLevel as CommonFeedback, FormRowSpec, TextInput, TextInputResult,
 };
 use super::config_editor::{ConfigEditor, EditorError};
+use crate::audio::devices::enumerate_input_devices;
 
 #[derive(Debug, Clone)]
 pub struct AudioState {
     pub device: String,
     pub max_duration_secs: u32,
     pub pause_media: bool,
+    pub duck_media: bool,
+    pub duck_media_volume_percent: u8,
     pub feedback_enabled: bool,
     pub feedback_theme: String,
     pub feedback_volume: f32,
@@ -56,6 +58,8 @@ pub enum Field {
     Device,
     MaxDuration,
     PauseMedia,
+    DuckMedia,
+    DuckMediaVolume,
     FeedbackEnabled,
     FeedbackTheme,
     FeedbackVolume,
@@ -66,6 +70,8 @@ impl Field {
         Field::Device,
         Field::MaxDuration,
         Field::PauseMedia,
+        Field::DuckMedia,
+        Field::DuckMediaVolume,
         Field::FeedbackEnabled,
         Field::FeedbackTheme,
         Field::FeedbackVolume,
@@ -78,6 +84,7 @@ const DURATION_STEP: u32 = 30;
 const DURATION_MIN: u32 = 30;
 const DURATION_MAX: u32 = 1800;
 const VOLUME_STEP: f32 = 0.1;
+const DUCK_VOLUME_STEP: i32 = 5;
 
 impl AudioState {
     pub fn load() -> Result<Self, EditorError> {
@@ -91,15 +98,16 @@ impl AudioState {
                 .map(|n| n.clamp(0, u32::MAX as i64) as u32)
                 .unwrap_or(120),
             pause_media: ed.get_bool("audio", "pause_media").unwrap_or(false),
+            duck_media: ed.get_bool("audio", "duck_media").unwrap_or(false),
+            duck_media_volume_percent: ed
+                .get_int("audio", "duck_media_volume_percent")
+                .map(|n| n.clamp(0, 150) as u8)
+                .unwrap_or(70),
             feedback_enabled: ed.get_bool("audio.feedback", "enabled").unwrap_or(false),
             feedback_theme: ed
                 .get_string("audio.feedback", "theme")
                 .unwrap_or_else(|| "default".to_string()),
-            feedback_volume: ed
-                .get_string("audio.feedback", "volume")
-                .and_then(|s| s.parse().ok())
-                .or_else(|| ed.get_int("audio.feedback", "volume").map(|n| n as f32))
-                .unwrap_or(0.7),
+            feedback_volume: ed.get_f32_or("audio.feedback", "volume", 0.7),
             field: Field::Device,
             feedback: None,
             dirty_since_load: false,
@@ -150,13 +158,15 @@ impl AudioState {
         ed.set_string("audio", "device", &self.device);
         ed.set_int("audio", "max_duration_secs", self.max_duration_secs as i64);
         ed.set_bool("audio", "pause_media", self.pause_media);
+        ed.set_bool("audio", "duck_media", self.duck_media);
+        ed.set_int(
+            "audio",
+            "duck_media_volume_percent",
+            self.duck_media_volume_percent as i64,
+        );
         ed.set_bool("audio.feedback", "enabled", self.feedback_enabled);
         ed.set_string("audio.feedback", "theme", &self.feedback_theme);
-        ed.set_string(
-            "audio.feedback",
-            "volume",
-            &format!("{:.2}", self.feedback_volume),
-        );
+        ed.set_f32("audio.feedback", "volume", self.feedback_volume);
 
         match ed.save() {
             Ok(()) => {
@@ -230,6 +240,13 @@ impl AudioState {
             Field::PauseMedia => {
                 self.pause_media = !self.pause_media;
             }
+            Field::DuckMedia => {
+                self.duck_media = !self.duck_media;
+            }
+            Field::DuckMediaVolume => {
+                let next = self.duck_media_volume_percent as i32 + delta * DUCK_VOLUME_STEP;
+                self.duck_media_volume_percent = next.clamp(0, 150) as u8;
+            }
             Field::FeedbackEnabled => {
                 self.feedback_enabled = !self.feedback_enabled;
             }
@@ -249,65 +266,6 @@ impl AudioState {
         }
         self.dirty_since_load = true;
         self.feedback = None;
-    }
-}
-
-fn enumerate_input_devices() -> Vec<String> {
-    // ALSA's PCM probing prints "Cannot open device /dev/dsp" and similar
-    // messages to stderr for every device cpal touches. Inside the TUI's
-    // alternate screen those lines paint over our frame and corrupt the
-    // next redraw. Silence stderr for the duration of the probe.
-    let _silenced = SilencedStderr::install();
-
-    let mut out = vec!["default".to_string()];
-    let host = cpal::default_host();
-    if let Ok(devices) = host.input_devices() {
-        for d in devices {
-            if let Ok(name) = d.name() {
-                if name != "default" && !out.contains(&name) {
-                    out.push(name);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// RAII guard that redirects fd 2 (stderr) to /dev/null on construction and
-/// restores the original fd on drop. Used to swallow noisy ALSA / cpal
-/// stderr during device enumeration so it doesn't bleed into the TUI's
-/// alternate screen.
-struct SilencedStderr {
-    saved_fd: Option<libc::c_int>,
-}
-
-impl SilencedStderr {
-    fn install() -> Self {
-        let null_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY) };
-        if null_fd < 0 {
-            return Self { saved_fd: None };
-        }
-        let saved = unsafe { libc::dup(libc::STDERR_FILENO) };
-        if saved < 0 {
-            unsafe { libc::close(null_fd) };
-            return Self { saved_fd: None };
-        }
-        unsafe { libc::dup2(null_fd, libc::STDERR_FILENO) };
-        unsafe { libc::close(null_fd) };
-        Self {
-            saved_fd: Some(saved),
-        }
-    }
-}
-
-impl Drop for SilencedStderr {
-    fn drop(&mut self) {
-        if let Some(saved) = self.saved_fd.take() {
-            unsafe {
-                libc::dup2(saved, libc::STDERR_FILENO);
-                libc::close(saved);
-            }
-        }
     }
 }
 
@@ -346,6 +304,17 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             "Pause MPRIS media on record",
             yesno(state.pause_media),
         ),
+        FormRowSpec::new(
+            state.field == Field::DuckMedia,
+            "Duck media volume on record",
+            yesno(state.duck_media),
+        ),
+        FormRowSpec::new(
+            state.field == Field::DuckMediaVolume,
+            "Ducked media volume",
+            format!("{}%", state.duck_media_volume_percent),
+        )
+        .dimmed(!state.duck_media),
         FormRowSpec::new(
             state.field == Field::FeedbackEnabled,
             "Audio feedback sounds",
@@ -448,12 +417,12 @@ fn guidance_for_field(state: &AudioState) -> Vec<Line<'_>> {
             Line::from(""),
             Line::from(
                 "Pauses Spotify, MPV, browsers, and other MPRIS players \
-                 while you record, then resumes them when transcription \
-                 finishes.",
+                 before recording begins, then resumes them as soon as \
+                 microphone capture stops.",
             ),
             Line::from(""),
             Line::from(Span::styled(
-                "Requires playerctl to be installed.",
+                "Uses MPRIS over the session D-Bus.",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(""),
@@ -462,6 +431,34 @@ fn guidance_for_field(state: &AudioState) -> Vec<Line<'_>> {
                  mic, or if you'd rather hear yourself dictate without \
                  lyrics in the way.",
             ),
+        ],
+        Field::DuckMedia => vec![
+            heading("Duck media volume on record"),
+            Line::from(""),
+            Line::from(
+                "Lowers active PulseAudio/PipeWire sink-input volume while \
+                 you record, then restores the original volume as soon as \
+                 recording stops.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Use this instead of pause media when you want playback to \
+                 continue quietly during push-to-talk.",
+            ),
+        ],
+        Field::DuckMediaVolume => vec![
+            heading("Ducked media volume"),
+            Line::from(""),
+            Line::from(
+                "Relative volume for active media streams while recording. \
+                 50% keeps each stream at half its current level; original \
+                 per-channel volumes are restored when the mic closes.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "0% is silence; 70% keeps 70% of the current level; values above 100% amplify.",
+                Style::default().fg(Color::Gray),
+            )),
         ],
         Field::FeedbackEnabled => vec![
             heading("Audio feedback sounds"),

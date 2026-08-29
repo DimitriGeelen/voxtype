@@ -76,7 +76,7 @@ config changes; restart it with `systemctl --user restart voxtype` for the
 new engine to take effect.
 
 **Notes:**
-- All engines except Whisper require an ONNX-enabled binary (`voxtype-*-onnx-*`)
+- Whisper, Remote Whisper, and Soniox run in every binary. The other engines (Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, Cohere) require an ONNX-enabled binary (`voxtype-*-onnx-*`)
 - Each ONNX engine reads its own `[<engine>]` section (e.g. `[parakeet]`, `[cohere]`)
 - See [PARAKEET.md](PARAKEET.md) for detailed Parakeet setup instructions
 - See [MOONSHINE.md](MOONSHINE.md) for detailed Moonshine setup instructions
@@ -368,6 +368,47 @@ Maximum recording duration in seconds. Recording automatically stops after this 
 [audio]
 max_duration_secs = 120  # Allow 2-minute recordings
 ```
+
+### pause_media
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+When `true`, pauses currently playing MPRIS media players before microphone capture starts and resumes only those players as soon as capture stops. Transcription and text output continue without keeping playback paused.
+
+```toml
+[audio]
+pause_media = true
+```
+
+### duck_media
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+When `true`, lowers active media stream volume when recording starts and restores the original volume as soon as recording stops, before transcription or output processing.
+
+Use this as an alternative to `pause_media` when you want music or video to keep playing quietly during push-to-talk.
+
+```toml
+[audio]
+duck_media = true
+duck_media_volume_percent = 70
+```
+
+### duck_media_volume_percent
+
+**Type:** Integer
+**Default:** `70`
+**Required:** No
+
+Relative volume percentage for streams affected by `duck_media`. The value is
+applied to each stream's current per-channel volume, not to a fixed 100% base:
+`70` keeps media at 70% of its current volume, `50` keeps it at half, and the
+original per-channel volumes are restored when recording stops. Values above
+`150` are clamped by the CLI override.
 
 ---
 
@@ -1582,13 +1623,13 @@ language_hints = ["hu", "en"]
 
 ### Building from Source
 
-Source builds need the `soniox` Cargo feature:
+Soniox is built unconditionally; no Cargo feature flag is required:
 
 ```bash
-cargo build --release --features soniox
+cargo build --release
 ```
 
-The `soniox` feature is independent of the other engine features and adds a small WebSocket client (tokio-tungstenite + rustls) plus an async HTTP client (reqwest) for the async API. It can be combined with any local engine feature, e.g. `--features "soniox parakeet"` for a binary that runs Parakeet locally and Soniox in the cloud depending on the `engine` setting.
+The Soniox backend pulls in a small WebSocket client (tokio-tungstenite + rustls) and an async HTTP client (reqwest) for the async API. They ship in every release binary so the engine surface stays uniform across flavors.
 
 ---
 
@@ -3208,6 +3249,9 @@ Any config file setting can be overridden via environment variable. These are ap
 |----------|------|-------------------|
 | `VOXTYPE_AUDIO_DEVICE` | string | `audio.device` |
 | `VOXTYPE_MAX_DURATION_SECS` | integer | `audio.max_duration_secs` |
+| `VOXTYPE_PAUSE_MEDIA` | bool | `audio.pause_media` |
+| `VOXTYPE_DUCK_MEDIA` | bool | `audio.duck_media` |
+| `VOXTYPE_DUCK_MEDIA_VOLUME_PERCENT` | integer | `audio.duck_media_volume_percent` |
 | `VOXTYPE_AUDIO_FEEDBACK` | bool | `audio.feedback.enabled` |
 
 **Output:**
@@ -3491,6 +3535,101 @@ is only required for source builds or for customization, and the bridge
 symlink is what puts the sidecar on PATH where the QML expects it. Pass
 `--skip-bridge` if your install already has the bridge on PATH. See the
 [user manual](USER_MANUAL.md#voxtype-setup-quickshell) for details.
+
+### Quickshell OSD customization
+
+The Quickshell frontend can customize the whole OSD without editing VoxType's
+packaged QML. Normal users configure declarative recipes; advanced users can
+explicitly opt into trusted custom QML packages.
+
+```toml
+[osd]
+frontend = "quickshell"
+style = "default"      # Built-in style, package name, or package path
+# palette = "omarchy" # omit for auto, or use omarchy, fallback, package, custom
+layout = "compact"    # compact, wide, minimal, tile, orb, custom
+
+# Explicit trusted package path. Custom QML is not sandboxed.
+# plugin_path = "~/.config/voxtype/osd/my-style"
+
+[osd.frame]
+background = "background" # semantic role, literal color, or "none"
+border = "state"          # state, semantic role, literal color, or "none"
+glow = true               # voice-reactive soft glow around the frame
+halo = true               # outline halo, used most visibly by orb recipes
+
+[[osd.visual.layers]]
+type = "pulse"
+source = "rms"
+color = "accent"
+order = 0
+opacity = 0.25
+radius = 12
+
+[[osd.visual.layers]]
+type = "bars"
+source = "peak"
+color = "accent"
+order = 10
+gain = 1.2
+mirror = true
+```
+
+When `palette` is omitted, a selected package manifest may choose the palette;
+otherwise VoxType falls back to Omarchy colors. With `palette = "omarchy"`,
+recipe colors such as `accent`, `background`,
+`foreground`, `success`, `warning`, and `error` resolve from the active
+Omarchy theme at `~/.config/omarchy/current/theme/colors.toml`. Literal colors
+such as `"#ff6600"` are allowed when a recipe needs to override the theme.
+
+Recipe layer `type` can be `shadow`, `background`, `waveform`, `bars`,
+`pulse`, `ring`, `meter`, `icon`, or `label`. Layer `source` can be `peak`,
+`rms`, `vad`, `state`, or `none`. Layer tunables you don't set use each
+layer type's own defaults; explicit values, including `0.0`, are honored.
+On `meter` layers, `color` sets the low-zone color while the mid/high
+gradient stops keep the `warning`/`error` roles; on `shadow` layers,
+`color` tints the backdrop (default black).
+
+`layout` controls the outer OSD frame. `compact`, `wide`, and `minimal` are
+strip layouts; `tile` is a square card; `orb` is a circular frame intended for
+ring-focused recipes.
+
+`[osd.frame]` controls the host frame around the recipe. Set
+`background = "none"` or `border = "none"` for frameless recipes; the visual
+layers continue to render normally.
+
+Shareable style packages are directories containing `voxtype-osd.toml`, optional
+assets under `assets/`, and optionally a QML entry file. Package QML is trusted
+code and only loads when the package is selected through `style` or
+`plugin_path`. A manifest only overrides the `[osd]` fields it explicitly
+sets: a package that ships only `[colors]` keeps your configured `layout`,
+`[osd.frame]`, and `[[osd.visual.layers]]` recipe, and an explicit `palette`
+in your config always beats the manifest's.
+
+If `style` names a package that isn't installed, `plugin_path` doesn't point
+at a package directory, or the manifest's `qml_entry` file is missing, the
+Quickshell launcher exits with an error explaining what to fix instead of
+silently falling back to the default style. `style` and `plugin_path` paths
+may start with `~`.
+
+```toml
+# ~/.config/voxtype/osd/bars-plus/voxtype-osd.toml
+name = "bars-plus"
+version = "1.0.0"
+palette = "package"      # Optional; host config can override it
+layout = "wide"
+# qml_entry = "CustomOsd.qml"
+
+[colors]
+accent = "#8BD5CA"
+background = "rgba(20, 22, 26, 0.82)"
+
+[[visual.layers]]
+type = "bars"
+source = "peak"
+color = "accent"
+order = 10
+```
 
 ---
 

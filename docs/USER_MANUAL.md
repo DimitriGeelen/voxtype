@@ -143,7 +143,7 @@ voxtype configure
 The TUI is also surfaced as a `.desktop` entry, so it shows up in Walker,
 fuzzel, rofi, KRunner, and GNOME Activities as **"Voxtype Configuration"**.
 The launcher script picks the first available terminal emulator (`$TERMINAL`,
-then ghostty / alacritty / kitty / foot / wezterm / konsole / xterm) and
+then ghostty / alacritty / kitty / foot / wezterm / konsole / xterm / xfce4-terminal) and
 sets the window class to `voxtype` so compositors can float it.
 
 #### Sections
@@ -153,7 +153,7 @@ sets the window class to `voxtype` so compositors can float it.
 | General | Active engine, variant binary, daemon status, hardware-aware variant recommendation |
 | Engine | Per-engine tuning for Whisper / Parakeet / Moonshine / SenseVoice / Paraformer / Dolphin / Omnilingual / Cohere |
 | Hotkey | PTT key, mode (PTT vs toggle), cancel key, modifier key, evdev-listener toggle |
-| Audio | Input device, max recording length, MPRIS-pause, audio feedback theme/volume |
+| Audio | Input device, max recording length, MPRIS pause/ducking, audio feedback theme/volume |
 | Output | Mode (type/clipboard/paste/file), driver order, auto-submit, post-process command |
 | Text | Spoken-punctuation toggle, smart-auto-submit, custom replacements list editor |
 | VAD | Silero VAD enable, backend (auto/energy/whisper), threshold |
@@ -298,6 +298,31 @@ files under `$XDG_RUNTIME_DIR/voxtype/`. The OSD itself does not need a
 keybinding; it activates automatically when the daemon enters the
 recording state.
 
+Quickshell also supports OSD customization through `[osd]`:
+
+```toml
+[osd]
+frontend = "quickshell"
+style = "default"      # built-in style, package name, or package path
+# palette = "omarchy" # omit for auto, or force active Omarchy theme colors
+layout = "compact"    # compact, wide, minimal, tile, orb, custom
+
+[osd.frame]
+background = "none"   # semantic role, literal color, or none
+border = "none"       # state, semantic role, literal color, or none
+glow = true
+```
+
+No-code visual recipes live under `[[osd.visual.layers]]` and can combine
+layers such as `shadow`, `pulse`, `bars`, `waveform`, `ring`, `meter`, `icon`,
+and `label`. Colors are
+semantic Omarchy tokens by default (`accent`, `background`, `foreground`,
+`success`, `warning`, `error`). `layout` changes the outer frame: strip-style
+layouts use `compact`, `wide`, or `minimal`, while `tile` and `orb` create
+non-strip OSD frames. `[osd.frame]` can remove or recolor the host background
+and border without changing QML. Advanced users can select a trusted package
+directory with `plugin_path`; package QML is not sandboxed.
+
 ### `voxtype record`
 
 Control recording from external sources (compositor keybindings, scripts).
@@ -389,6 +414,12 @@ sample_rate = 16000
 # Recording automatically stops and transcribes after this time
 max_duration_secs = 60
 
+# Optional media behavior while recording
+# pause_media pauses MPRIS players; duck_media lowers active stream volume
+# pause_media = false
+# duck_media = false
+# duck_media_volume_percent = 70
+
 [whisper]
 # Model to use for transcription
 # Options: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3
@@ -440,7 +471,7 @@ on_transcription = true
 
 For a cloud streaming alternative to the local engines above, voxtype supports [Soniox](https://soniox.com). Different trade-off space: paid SaaS, no local model, 60+ languages with strong Hungarian/EU coverage, sub-second partials at the cursor.
 
-Build with `--features soniox`, set `SONIOX_API_KEY`, and:
+Soniox ships in every release binary. Set `SONIOX_API_KEY` and:
 
 ```toml
 engine = "soniox"
@@ -1833,6 +1864,9 @@ If you prefer manual setup, add these to your voxtype config:
 
 ```toml
 [output]
+# Command to run when recording starts
+pre_recording_command = "hyprctl dispatch submap voxtype_recording"
+
 # Command to run BEFORE typing (e.g., switch to modifier-blocking submap)
 pre_output_command = "hyprctl dispatch submap voxtype_suppress"
 
@@ -2403,7 +2437,7 @@ icon_theme = "nerd-font"  # or: material, phosphor, codicons, minimal, dots, arr
 
 Available themes include Nerd Font, Material Design Icons, Phosphor, VS Code Codicons, and several universal themes that don't require special fonts (minimal, dots, arrows, text).
 
-**Extended status info:** Use `--extended` to include model, device, and backend in the JSON output and tooltip:
+**Extended status info:** Use `--extended` to include model, device, and backend in the JSON output and tooltip. The backend field describes the running daemon's binary, not the package-selected one, so it stays accurate when the daemon was started before a variant switch or from a systemd `ExecStart=` override. A daemon running a binary that is not an installed variant reports `custom`:
 
 ```json
 "custom/voxtype": {

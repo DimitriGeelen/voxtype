@@ -713,6 +713,8 @@ We want to hear from you! Voxtype is a young project and your feedback helps mak
 - [Sami Jawhar](https://github.com/sjawhar) - Eager input processing wiring
 - [KaiStarkk](https://github.com/KaiStarkk) - Post-process trim and fallback_on_empty options
 - [graysky](https://github.com/graysky2) - Flash attention config fix
+- [OldJobobo](https://github.com/OldJobobo) - Quickshell OSD theming, Omarchy theme state path support, configurable media ducking, degenerate Whisper transcript retry; co-owns `quickshell/`
+- [Matthias Breddin](https://github.com/lunetics) - IBus non-ASCII reordering troubleshooting, Rust 1.98 clippy fix, media ducking review
 
 ## License
 

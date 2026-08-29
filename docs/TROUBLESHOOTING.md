@@ -16,6 +16,8 @@ Solutions to common issues when using Voxtype.
   - [Wrong characters on non-US keyboard layouts](#wrong-characters-on-non-us-keyboard-layouts-yz-swapped-qwertz-azerty)
 - [Performance Issues](#performance-issues)
 - [Soniox Backend Issues](#soniox-backend-issues)
+- [Media Does Not Pause While Recording (Omarchy Quattro)](#media-does-not-pause-while-recording-omarchy-quattro)
+- [Quickshell OSD Issues](#quickshell-osd-issues)
 - [Systemd Service Issues](#systemd-service-issues)
 - [Debug Mode](#debug-mode)
 
@@ -392,6 +394,11 @@ If you experience phrase repetition (e.g., "word word word"), make sure this set
 ### Hallucinations (transcribed text not spoken)
 
 **Cause:** Known Whisper behavior with silence or noise.
+
+Whisper may also occasionally return a punctuation-only transcript, such as a
+lone dash (`-`), even when the recording contains speech. Voxtype treats this
+as a degenerate decode: it retries the same audio once with a more conservative
+decode path, then drops the result if the retry is still punctuation-only.
 
 **Solutions:**
 1. Use a larger model for better accuracy
@@ -843,6 +850,36 @@ You can also enable it via CLI flag (`--wtype-shift-prefix`) or environment vari
 type_delay_ms = 10  # Try 10-50ms
 ```
 
+### Non-ASCII characters move to the front of the text (GNOME, type mode)
+
+**Symptom:** Dictating text with non-ASCII characters (umlauts, accents, ß)
+into GTK applications (GNOME Terminal, GNOME Text Editor) delivers them
+clustered at the start of the output: `Müll äöüß` arrives as `üäöüß Mll `.
+The log (`journalctl --user -u voxtype`) shows the correct transcription,
+and Chrome or other non-GTK apps receive the same text correctly. Short
+dictations often arrive intact, longer ones reliably fail.
+
+**Cause:** IBus, GNOME's default input method, reorders non-ASCII key
+events relative to ASCII when synthetic input arrives faster than human
+typing. The events leave the typing tool (eitype) in the correct order,
+so this is neither a voxtype nor an eitype bug. Reported upstream as
+ibus/ibus#2934; details and measurements in
+Adam-D-Lewis/eitype#21.
+
+**Solution:** Use paste mode, which transfers the text atomically through
+the clipboard and cannot be reordered:
+
+```toml
+[output]
+mode = "paste"
+paste_keys = "ctrl+shift+v"  # terminal convention; GUI apps expect ctrl+v
+```
+
+Partial alternatives: `type_delay_ms` shrinks the displacement but does
+not remove it (about 100 ms per key would be needed), and launching the
+receiving app with `GTK_IM_MODULE=simple` avoids the bug at the cost of
+disabling IBus features for that app.
+
 ### Clipboard not working
 
 **Cause:** wl-copy not installed or Wayland session issue.
@@ -1107,7 +1144,89 @@ async_max_wait_secs = 300
 
 ### Post-stop "Streaming Error: Soniox server error (408): Request timeout"
 
-This notification used to appear when you released the hotkey and Soniox's server-side timer fired before the connection fully closed. Voxtype now suppresses 408s that arrive **after** you've signalled end-of-audio, so this should be silent. If you still see it, your build predates the fix (any release after v0.7.2 + soniox).
+This notification used to appear when you released the hotkey and Soniox's server-side timer fired before the connection fully closed. Voxtype now suppresses 408s that arrive **after** you've signalled end-of-audio, so this should be silent. If you still see it, your build predates the fix (any release v0.7.5 or later includes it).
+
+---
+
+## Media Does Not Pause While Recording (Omarchy Quattro)
+
+**Symptom:** `pause_media = true` is set, but music keeps playing while you
+dictate. Common on Omarchy Quattro, whose upgrade removes `playerctl` while the
+shipped Voxtype config still enables media pausing.
+
+**Cause:** Voxtype v0.7.5 and earlier paused players by shelling out to
+`playerctl`. When that binary is absent the pause silently does nothing.
+
+**Fix:** Upgrade to Voxtype v1.0.0 or newer. Media pausing now speaks MPRIS over
+D-Bus directly and needs no external binary, so it works on a playerctl-free
+system.
+
+If you must stay on v0.7.5, either install `playerctl` or turn the feature off:
+
+```toml
+[audio]
+pause_media = false
+```
+
+**Check which players Voxtype can see:**
+
+```bash
+busctl --user list | grep org.mpris.MediaPlayer2
+```
+
+An empty list means no MPRIS-capable player is running, which is a different
+problem from a missing `playerctl`. Some players (notably certain browsers)
+report unreliable MPRIS status; skip those with
+`pause_media_ignored_players`.
+
+## Quickshell OSD Issues
+
+These apply when `[osd] frontend = "quickshell"`. See the
+[configuration guide](CONFIGURATION.md#quickshell-osd-customization) for the
+full set of style, palette, layout, and recipe options.
+
+### OSD exits with "OSD style '...' not found"
+
+The `[osd] style` value names a package that isn't installed. The error lists
+every directory that was searched. Install the style package into one of
+those directories (typically `~/.config/voxtype/osd/<name>/`), or set
+`style = "default"`. A package directory must contain a `voxtype-osd.toml`
+manifest.
+
+### OSD exits with "plugin_path ... is not an OSD package directory"
+
+`[osd] plugin_path` must point at a directory containing `voxtype-osd.toml`.
+Fix the path (a leading `~` is allowed) or remove `plugin_path` from
+config.toml.
+
+### OSD exits with "OSD package qml_entry not found"
+
+The selected package's manifest names a `qml_entry` file that doesn't exist
+in the package directory. Fix or remove `qml_entry` in the package's
+`voxtype-osd.toml`; without it the package uses the built-in renderer.
+
+### Custom package selected but the default card renders instead
+
+If a package's custom QML fails to load, the OSD logs a warning and falls
+back to the built-in surface rather than rendering nothing. Run the launcher
+in the foreground to see the QML error:
+
+```bash
+voxtype-osd-quickshell --no-daemonize
+```
+
+### Style or recipe changes don't show up
+
+The launcher resolves `[osd]` config once at startup and writes the result to
+`$XDG_RUNTIME_DIR/voxtype/quickshell-style.json`. After editing config.toml
+or a package manifest, restart the daemon (or the OSD) to re-resolve:
+
+```bash
+systemctl --user restart voxtype
+```
+
+Omarchy theme switches are picked up without a restart only if the style file
+is rewritten; re-launching the OSD refreshes the palette.
 
 ---
 

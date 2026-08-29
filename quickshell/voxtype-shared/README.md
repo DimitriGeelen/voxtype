@@ -1,9 +1,9 @@
 # voxtype-shared
 
 Shared Quickshell QML modules used by every voxtype QML frontend: the
-OSD card, the engine picker menu, and (eventually) the meeting controls
-canvas. Extracted so the frontends don't each ship their own copy of
-theme constants, state file watcher, and audio bridge wrapper.
+OSD card, the engine picker menu, and meeting controls canvas. Extracted
+so the frontends don't each ship their own copy of theme constants,
+state file watcher, audio bridge wrapper, or recipe renderer.
 
 ## Modules
 
@@ -74,6 +74,29 @@ Signals:
 - `connected()` — emitted on `{"status":"connected"}`.
 - `disconnected()` — emitted on `{"status":"disconnected"}` or when the bridge process exits.
 
+### `StyleLoader`
+
+Reads the runtime style JSON path from `VOXTYPE_OSD_STYLE_FILE`. The
+`voxtype-osd-quickshell` launcher writes this file after resolving
+`[osd]` config, package manifests, and Omarchy palette tokens.
+
+Public properties and helpers:
+
+| Property / function | Purpose |
+|---------------------|---------|
+| `config`            | Parsed runtime style object |
+| `color(role, fallback)` | Resolve semantic tokens or literal colors |
+| `customQmlUrl()`    | `file://` URL for an explicitly selected trusted QML package entry |
+
+### `RecipeRenderer`
+
+Canvas renderer for no-code OSD visual recipes. It consumes a style
+loader, recent audio peak ring, peak-hold state, and daemon state. Layer
+types are `shadow`, `background`, `waveform`, `bars`, `pulse`, `ring`,
+`meter`, `icon`, and `label`. Colors are semantic roles by default (`accent`,
+`background`, `foreground`, `success`, `warning`, `error`) and normally
+come from the active Omarchy theme.
+
 ## Minimal import
 
 ```qml
@@ -92,6 +115,10 @@ Rectangle {
             // push into a ring buffer for the waveform renderer
         }
     }
+
+    VT.StyleLoader {
+        id: style
+    }
 }
 ```
 
@@ -103,7 +130,8 @@ user's Quickshell config tree.
 
 ## Scope
 
-These modules are the foundation for v0.7.3 Wave 2 work: the waveform
-OSD, the engine picker menu, and the meeting controls panel. None of
-those frontends ship yet; this commit only lands the shared modules
-plus a refactor of the existing OSD proof-of-concept to consume them.
+These modules back the three Quickshell widgets that ship with voxtype
+since v0.7.5: `OsdSurface`, `EnginePicker`, and `MeetingControls` (see
+[../README.md](../README.md)). `shell.qml` instantiates one `StateReader`
+and one `AudioBridge` and passes them to the widgets so only a single
+sidecar process runs.

@@ -23,8 +23,11 @@ mod text_section;
 mod vad_section;
 mod waybar_section;
 
+// Exported beyond the crate so the binary's `voxtype config` handlers write
+// through the same atomic-save-and-validate path the TUI uses, rather than
+// growing a second config writer.
 #[allow(unused_imports)]
-pub(crate) use config_editor::{ConfigEditor, EditorError};
+pub use config_editor::{ConfigEditor, EditorError};
 
 use crossterm::{
     event::{
@@ -54,7 +57,12 @@ pub fn run(force_package_mode: bool) -> anyhow::Result<()> {
     let mut terminal = enter_terminal()?;
     let result = event_loop(&mut terminal, force_package_mode);
     leave_terminal(&mut terminal)?;
-    result
+    if result? {
+        // Printed after the alternate screen is torn down so it lands in
+        // the user's shell, not the vanished TUI.
+        println!("Restarted the voxtype daemon to apply saved config changes.");
+    }
+    Ok(())
 }
 
 fn enter_terminal() -> anyhow::Result<Tui> {
@@ -75,7 +83,9 @@ fn leave_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()> {
+/// Returns `true` when the daemon was restarted on the way out so `run()`
+/// can tell the user once the terminal is back to normal.
+fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<bool> {
     let mut app = App::new(force_package_mode);
     let mut last_general_refresh = std::time::Instant::now();
     let general_refresh_interval = Duration::from_secs(2);
@@ -108,7 +118,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()
                 if let Some(action) = handle_global_key(&mut app, key) {
                     match dispatch_action(terminal, &mut app, action)? {
                         LoopControl::Continue => continue,
-                        LoopControl::Quit => return Ok(()),
+                        LoopControl::Quit => return Ok(restart_if_config_newer(&app)),
                     }
                 }
 
@@ -120,7 +130,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()
 
                 match dispatch_action(terminal, &mut app, action)? {
                     LoopControl::Continue => {}
-                    LoopControl::Quit => return Ok(()),
+                    LoopControl::Quit => return Ok(restart_if_config_newer(&app)),
                 }
             }
             Event::Mouse(mouse) => {
@@ -198,20 +208,25 @@ fn dispatch_action(
     }
 }
 
-/// Run `voxtype setup model <name>` in the parent shell so the user sees the
-/// download progress. We invoke whichever voxtype is on PATH because that's
-/// the user's installed binary; the TUI's own image might be an
-/// uninstalled host build that doesn't have the engine feature flags.
+/// Download a model in the parent shell so the user sees the progress. We
+/// invoke whichever voxtype is on PATH because that's the user's installed
+/// binary; the TUI's own image might be an uninstalled host build that
+/// doesn't have the engine feature flags.
+///
+/// `setup model` takes no positional argument (see `SetupAction::Model` in
+/// `src/cli/setup.rs`) — the download entry point is the top-level
+/// `setup --download --model <NAME>`. Passing the name positionally made
+/// clap reject the command before it did anything.
 fn run_setup_model(engine: &str, model: &str) -> Result<(), String> {
     let _ = engine;
     let status = std::process::Command::new("voxtype")
-        .args(["setup", "model", model])
+        .args(["setup", "--download", "--model", model])
         .status()
-        .map_err(|e| format!("could not invoke `voxtype setup model`: {}", e))?;
+        .map_err(|e| format!("could not invoke `voxtype setup --download`: {}", e))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("voxtype setup model exited with {}", status))
+        Err(format!("voxtype setup --download exited with {}", status))
     }
 }
 
@@ -222,7 +237,29 @@ fn restart_voxtype_daemon(app: &mut App) {
     let _ = std::process::Command::new("systemctl")
         .args(["--user", "restart", "voxtype"])
         .status();
+    // The freshly (re)started daemon has read the config as it stands now,
+    // so quitting doesn't need another restart unless a later save lands.
+    app.config_synced_mtime = app::config_file_mtime();
     app.refresh_inventory();
+}
+
+/// Restart the daemon on the way out of the TUI when a save landed after
+/// the daemon's last known (re)start, so config-only changes (an engine
+/// switch on a binary that supports both, a hotkey edit, ...) take effect
+/// without a manual `systemctl --user restart voxtype`. The decision logic
+/// lives in `app::should_restart_on_quit`; see its doc for the cases.
+fn restart_if_config_newer(app: &App) -> bool {
+    let restart = app::should_restart_on_quit(
+        crate::daemon_status::is_daemon_running(),
+        app.config_synced_mtime,
+        app::config_file_mtime(),
+    );
+    if restart {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "restart", "voxtype"])
+            .status();
+    }
+    restart
 }
 
 /// Routes keypresses while the save-on-exit prompt is showing.
@@ -278,6 +315,14 @@ fn handle_global_key(app: &mut App, key: KeyEvent) -> Option<Action> {
     match (key.code, key.modifiers) {
         (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Action::Quit),
         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+        // F2 jumps to the General section, where the variant-matrix picker
+        // lives. Mentioned in the variant-mismatch banner so a user landing
+        // on (say) Audio can fix the engine/binary mismatch without
+        // navigating the sidebar by hand. See #450.
+        (KeyCode::F(2), _) => {
+            app.jump_to_section(Section::General);
+            Some(Action::None)
+        }
         (KeyCode::Tab, _) => {
             if app.sidebar_focused {
                 app.focus_content();
@@ -366,26 +411,37 @@ fn handle_section_key(app: &mut App, key: KeyEvent) -> Action {
 }
 
 fn draw(f: &mut Frame, app: &App) {
+    // Reserve a row for the variant-mismatch banner when it's active. Slotting
+    // it between the title and the sidebar/content split means it stays
+    // visible no matter which section the user is on, which is the whole
+    // point — the General section's existing model-missing banner sits
+    // *inside* its section pane and disappears when the user navigates
+    // away. See #450.
+    let banner_height = if app.variant_mismatch.is_some() { 2 } else { 0 };
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // title bar
-            Constraint::Min(0),    // body (sidebar + content)
-            Constraint::Length(1), // footer / help
+            Constraint::Length(1),             // title bar
+            Constraint::Length(banner_height), // variant-mismatch banner (0 when absent)
+            Constraint::Min(0),                // body (sidebar + content)
+            Constraint::Length(1),             // footer / help
         ])
         .split(f.area());
 
     render_title(f, outer[0]);
+    if app.variant_mismatch.is_some() {
+        render_variant_mismatch_banner(f, outer[1], app);
+    }
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(sidebar::WIDTH), Constraint::Min(0)])
-        .split(outer[1]);
+        .split(outer[2]);
 
     sidebar::render(f, body[0], app);
     render_section(f, body[1], app);
 
-    render_footer(f, outer[2], app);
+    render_footer(f, outer[3], app);
 
     if app.help_open {
         render_help_overlay(f);
@@ -468,6 +524,7 @@ fn render_help_overlay(f: &mut Frame) {
         Line::from("  Esc          Sidebar focus / quit from sidebar"),
         Line::from("  q, Ctrl-C    Quit"),
         Line::from("  ?            Toggle this help"),
+        Line::from("  F2           Jump to General (variant picker)"),
         Line::from(""),
         Line::from(Span::styled("Sidebar", bold)),
         Line::from("  ↑↓ / jk      Navigate sections"),
@@ -513,6 +570,54 @@ fn render_title(f: &mut Frame, area: Rect) {
         ),
     ]);
     f.render_widget(Paragraph::new(line), area);
+}
+
+/// Persistent two-line banner shown at the top of every section when the
+/// running binary can't service the configured engine (see #450). The
+/// emoji-free, monochrome-bright style matches the existing TUI feedback
+/// banners (yellow accent, plain ASCII glyphs) so it renders the same in
+/// any palette.
+fn render_variant_mismatch_banner(f: &mut Frame, area: Rect, app: &App) {
+    use crate::setup::variant_check::Remediation;
+    let Some(m) = app.variant_mismatch.as_ref() else {
+        return;
+    };
+    let warn = Style::default().fg(Color::Yellow);
+    let dim = Style::default().fg(Color::DarkGray);
+    let bold = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(ratatui::style::Modifier::BOLD);
+
+    let active = m
+        .active_variant_name
+        .as_deref()
+        .unwrap_or("the running binary");
+
+    let line1 = Line::from(vec![
+        Span::styled(" ! ", bold),
+        Span::styled("engine = ", warn),
+        Span::styled(m.configured_engine, bold),
+        Span::styled(" but ", warn),
+        Span::styled(active, bold),
+        Span::styled(" was built without ", warn),
+        Span::styled(format!("--features {}", m.required_feature), bold),
+    ]);
+
+    let line2 = match &m.remediation {
+        Remediation::SwitchToVariant { target } => Line::from(vec![
+            Span::styled("   Fix: press ", dim),
+            Span::styled("F2", warn),
+            Span::styled(" to open the variant picker, or run ", dim),
+            Span::styled("sudo voxtype setup onnx --enable", warn),
+            Span::styled(format!("  (recommended: {})", target.binary_name()), dim),
+        ]),
+        Remediation::Rebuild { feature } => Line::from(vec![
+            Span::styled("   Fix: rebuild voxtype with ", dim),
+            Span::styled(format!("--features {}", feature), warn),
+        ]),
+    };
+
+    f.render_widget(Paragraph::new(vec![line1, line2]), area);
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
