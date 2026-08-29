@@ -3409,7 +3409,10 @@ impl Daemon {
                             _ => None,
                         };
                         eager_transcriber = transcriber_preloaded.clone();
-                        if eager_transcriber.is_none() {
+                        if eager_transcriber.is_none()
+                            && self.config.engine
+                                == crate::config::TranscriptionEngine::Whisper
+                        {
                             // Whisper engine: get from model manager
                             if let Some(ref mut mm) = self.model_manager {
                                 match mm.get_prepared_transcriber(model_override) {
