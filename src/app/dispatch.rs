@@ -403,7 +403,7 @@ pub(crate) async fn dispatch(
         }
 
         Commands::Configure { force_package_mode } => {
-            voxtype::tui::run(force_package_mode)?;
+            voxtype::tui::run(force_package_mode, cli.config.clone())?;
         }
 
         Commands::Status {
