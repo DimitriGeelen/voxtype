@@ -2539,6 +2539,25 @@ impl Daemon {
                     tracing::debug!("Transcription task was cancelled");
                 } else {
                     tracing::error!("Transcription task panicked: {}", e);
+
+                    // spawn_blocking already kept the panic from reaching the
+                    // daemon, so this is not about survival. It is about not
+                    // reusing an engine whose internal state is whatever the
+                    // panic left behind: drop the cached model so the next
+                    // recording loads a clean one (#643).
+                    //
+                    // Only on a real panic. A cancellation is our own doing
+                    // and leaves the engine perfectly usable.
+                    if let Some(ref mut mm) = self.model_manager {
+                        let dropped = mm.drop_loaded_models();
+                        if dropped > 0 {
+                            tracing::warn!(
+                                "Dropped {} cached model(s) after the panic; \
+                                 the next recording will reload",
+                                dropped
+                            );
+                        }
+                    }
                 }
                 self.reset_to_idle(state).await;
             }
