@@ -402,8 +402,18 @@ pub(crate) async fn dispatch(
             run_info_command(action, &config)?;
         }
 
-        Commands::Configure { force_package_mode } => {
-            voxtype::tui::run(force_package_mode, cli.config.clone())?;
+        Commands::Configure {
+            force_package_mode,
+            probe_audio_devices,
+        } => {
+            if probe_audio_devices {
+                voxtype::tui::probe_audio_devices();
+            } else {
+                // Carries the -c/--config path so the TUI edits the file the
+                // user named (#595) while keeping the out-of-process device
+                // probe that keeps the Audio section responsive (#541).
+                voxtype::tui::run(force_package_mode, cli.config.clone())?;
+            }
         }
 
         Commands::Status {
