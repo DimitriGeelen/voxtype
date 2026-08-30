@@ -53,7 +53,17 @@ use section::Section;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-pub fn run(force_package_mode: bool) -> anyhow::Result<()> {
+/// Launch the TUI.
+///
+/// `config_path` is the `-c/--config` value; when set, every section reads and
+/// writes that file instead of the default. Installed before the first section
+/// loads, because a section that has already read the default would save back
+/// to it (#595).
+pub fn run(
+    force_package_mode: bool,
+    config_path: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    config_editor::set_tui_config_path(config_path);
     let mut terminal = enter_terminal()?;
     let result = event_loop(&mut terminal, force_package_mode);
     leave_terminal(&mut terminal)?;
