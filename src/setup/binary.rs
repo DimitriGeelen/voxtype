@@ -66,11 +66,98 @@ fn variant_subdir(basename: &str) -> Option<&'static str> {
 /// they ran — e.g. `setup gpu --enable` for a Vulkan switch, or `setup onnx
 /// --enable` for a Parakeet switch. The function emits the full retry as
 /// `Try: sudo voxtype <retry_hint>`.
+/// Highest `GLIBC_x.y` version named in a dynamic-linker failure, if any.
+///
+/// The loader prints one line per unmet symbol version, so the largest is the
+/// one the user actually needs.
+fn required_glibc_from_stderr(stderr: &str) -> Option<String> {
+    let mut best: Option<(u32, u32, String)> = None;
+    for token in stderr.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_')) {
+        let Some(rest) = token.strip_prefix("GLIBC_") else {
+            continue;
+        };
+        let mut parts = rest.split('.');
+        let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(major), Ok(minor)) = (major.parse::<u32>(), minor.parse::<u32>()) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|(bm, bn, _)| (major, minor) > (*bm, *bn))
+        {
+            best = Some((major, minor, rest.to_string()));
+        }
+    }
+    best.map(|(_, _, v)| v)
+}
+
+/// Verify a variant can actually execute here before pointing the active
+/// binary at it.
+///
+/// A packaged variant can be present and still unrunnable: the ONNX variants
+/// are built against glibc 2.39 while the Whisper ones need 2.34, so on
+/// Debian 12 (2.36) switching to an ONNX variant used to report success and
+/// leave the CLI bricked with a raw linker error. That includes
+/// `setup variant --to` itself, so the user could not switch back with the
+/// tool that broke it. See #633.
+fn verify_binary_runs(binary_path: &Path) -> anyhow::Result<()> {
+    let output = match std::process::Command::new(binary_path)
+        .arg("--version")
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => anyhow::bail!(
+            "Cannot run {}: {}\n\
+             Leaving the current binary active.",
+            binary_path.display(),
+            e
+        ),
+    };
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if let Some(needed) = required_glibc_from_stderr(&stderr) {
+        anyhow::bail!(
+            "{} needs glibc {} but this system is older, so it cannot run here.\n\
+             Leaving the current binary active.\n\
+             \n\
+             The ONNX variants are built on a newer base image than the Whisper\n\
+             ones. Use a Whisper variant, or upgrade the distribution.",
+            binary_path.display(),
+            needed
+        );
+    }
+
+    let detail = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("no error output");
+    anyhow::bail!(
+        "{} exited {} when asked for its version, so it cannot run here.\n\
+         Leaving the current binary active.\n\
+         \n\
+         {}",
+        binary_path.display(),
+        output.status.code().unwrap_or(-1),
+        detail
+    );
+}
+
 pub fn install_active_binary(
     active_bin: &str,
     binary_path: &Path,
     retry_hint: &str,
 ) -> anyhow::Result<()> {
+    // Refuse to activate a binary that cannot run here. Checked before any
+    // write so a failure leaves the previous target in place (#633).
+    verify_binary_runs(binary_path)?;
+
     // Decide whether this variant needs a wrapper script (vs a plain symlink)
     // from the BASENAME, not from the canonicalized parent dir. The previous
     // implementation looked at `fs::canonicalize(binary_path).parent()`,
@@ -1098,6 +1185,66 @@ mod tests {
         require_feature_listed!("gpu-metal");
         require_feature_listed!("osd-native");
         require_feature_listed!("osd-gtk4");
+    }
+
+    /// #633: the loader names every unmet symbol version; the highest is the
+    /// one the user actually needs, and that is what the error should quote.
+    #[test]
+    fn required_glibc_picks_the_highest_version() {
+        let stderr = "voxtype: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by voxtype)\n\
+                      voxtype: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found (required by voxtype)\n";
+        assert_eq!(required_glibc_from_stderr(stderr).as_deref(), Some("2.39"));
+    }
+
+    #[test]
+    fn required_glibc_compares_numerically_not_lexically() {
+        // 2.9 must not beat 2.34 the way string ordering would.
+        let stderr = "version `GLIBC_2.9' not found\nversion `GLIBC_2.34' not found\n";
+        assert_eq!(required_glibc_from_stderr(stderr).as_deref(), Some("2.34"));
+    }
+
+    #[test]
+    fn required_glibc_absent_for_unrelated_failures() {
+        assert_eq!(required_glibc_from_stderr("Segmentation fault"), None);
+        assert_eq!(required_glibc_from_stderr(""), None);
+    }
+
+    /// A binary that cannot execute must be refused, and the refusal must say
+    /// the current binary is untouched — the old behaviour reported success
+    /// and left the CLI unusable.
+    #[test]
+    fn verify_binary_runs_rejects_a_non_executable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("voxtype-broken");
+        std::fs::write(&path, b"not a binary").unwrap();
+        let err = verify_binary_runs(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("Leaving the current binary active"),
+            "refusal must state the active binary is unchanged, got: {err}"
+        );
+    }
+
+    /// The happy path must stay cheap and quiet: anything that runs and exits
+    /// zero is accepted.
+    ///
+    /// The probe target is written here rather than borrowed from the system
+    /// (`/bin/true` and friends): the Nix build sandbox has almost no
+    /// filesystem, and a test that assumes one fails there for reasons that
+    /// have nothing to do with the code under test. The script ignores its
+    /// arguments, so it works under any `/bin/sh`, dash included.
+    #[test]
+    fn verify_binary_runs_accepts_a_working_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("voxtype-fake");
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            verify_binary_runs(&path).is_ok(),
+            "a binary that exits zero must be accepted"
+        );
     }
 
     /// Regression test for #443: when `install_active_binary` is called

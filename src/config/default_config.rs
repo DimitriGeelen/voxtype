@@ -40,7 +40,9 @@ modifiers = []
 
 [audio]
 # Audio input device ("default" uses system default)
-# List devices with: pactl list sources short
+# List devices with: voxtype info devices
+# (or `arecord -L`). This takes an ALSA device name, not a PulseAudio
+# or PipeWire source name -- names from `pactl list sources` will not work.
 device = "default"
 
 # Sample rate in Hz (whisper expects 16000)
@@ -174,6 +176,12 @@ translate = false
 #
 # Timeout for remote requests in seconds (default: 30)
 # remote_timeout_secs = 30
+#
+# Send an explicit "language=auto" field when language = "auto" (default: false)
+# By default the language field is omitted in auto mode, which OpenAI-compatible
+# endpoints treat as auto-detect. whisper.cpp's server instead falls back to its
+# own -l setting (default "en"); enable this so "auto" is sent explicitly.
+# remote_send_auto_language = true
 
 [output]
 # Primary output mode: "type" or "clipboard"

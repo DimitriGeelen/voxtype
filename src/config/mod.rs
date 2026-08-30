@@ -20,7 +20,7 @@ mod profile;
 mod root;
 pub mod schema;
 mod status;
-mod text;
+pub(crate) mod text;
 mod vad;
 mod whisper;
 

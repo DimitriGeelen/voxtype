@@ -53,7 +53,24 @@ use section::Section;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-pub fn run(force_package_mode: bool) -> anyhow::Result<()> {
+/// Entry point for the hidden `voxtype configure --probe-audio-devices`
+/// flag: print detected input devices and exit. See
+/// `audio::start_device_scan` for why this runs in its own process.
+pub fn probe_audio_devices() {
+    audio::print_input_devices();
+}
+
+/// Launch the TUI.
+///
+/// `config_path` is the `-c/--config` value; when set, every section reads and
+/// writes that file instead of the default. Installed before the first section
+/// loads, because a section that has already read the default would save back
+/// to it (#595).
+pub fn run(
+    force_package_mode: bool,
+    config_path: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    config_editor::set_tui_config_path(config_path);
     let mut terminal = enter_terminal()?;
     let result = event_loop(&mut terminal, force_package_mode);
     leave_terminal(&mut terminal)?;
@@ -91,6 +108,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<bo
     let general_refresh_interval = Duration::from_secs(2);
 
     loop {
+        app.poll_background();
         terminal.draw(|f| draw(f, &app))?;
 
         if !event::poll(Duration::from_millis(250))? {

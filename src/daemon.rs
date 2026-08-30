@@ -24,7 +24,7 @@ use crate::state::{ChunkResult, State};
 use crate::text::TextProcessor;
 use crate::transcribe::{StreamHandle, StreamingEvent, Transcriber};
 use pidlock::Pidlock;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -100,6 +100,36 @@ fn write_state_file(path: &PathBuf, state: &str) {
 }
 
 /// Remove state file on shutdown
+/// Path of the marker that tells OSD frontends to stay hidden for the
+/// recording in flight. Written when a recording starts with `--no-osd`,
+/// removed when the daemon returns to idle.
+///
+/// A marker file rather than a state-file value on purpose: the status JSON
+/// contract went stable in 1.0.0, and Waybar, `status --follow`, and every
+/// other consumer must keep seeing the real state. Only the OSD frontends
+/// read this.
+fn osd_suppressed_path() -> PathBuf {
+    Config::runtime_dir().join("osd_suppressed")
+}
+
+fn set_osd_suppressed(suppressed: bool) {
+    set_osd_suppressed_at(&osd_suppressed_path(), suppressed);
+}
+
+/// Path-taking half of `set_osd_suppressed`, so the marker lifecycle is
+/// testable without mocking `Config::runtime_dir()`.
+fn set_osd_suppressed_at(path: &Path, suppressed: bool) {
+    if suppressed {
+        if let Err(e) = std::fs::write(path, "1") {
+            tracing::warn!("Failed to write OSD suppression marker: {}", e);
+        }
+    } else if path.exists() {
+        if let Err(e) = std::fs::remove_file(path) {
+            tracing::warn!("Failed to clear OSD suppression marker: {}", e);
+        }
+    }
+}
+
 fn cleanup_state_file(path: &PathBuf) {
     if path.exists() {
         if let Err(e) = std::fs::remove_file(path) {
@@ -831,7 +861,11 @@ impl Daemon {
         };
 
         // Initialize text processor
-        let text_processor = TextProcessor::new(&config.text);
+        // Pass the active engine's language so filler filtering can skip
+        // words that are ordinary vocabulary there rather than disfluencies
+        // (#566).
+        let text_processor =
+            TextProcessor::new_for_language(&config.text, config.active_language());
         if config.text.spoken_punctuation {
             tracing::info!("Spoken punctuation enabled");
         }
@@ -995,6 +1029,21 @@ impl Daemon {
     fn update_state(&self, state_name: &str) {
         if let Some(ref path) = self.state_file_path {
             write_state_file(path, state_name);
+        }
+
+        // OSD suppression marker lifecycle. Consuming the sentinel here rather
+        // than at output time is deliberate: the OSD appears when recording
+        // starts, so the decision has to be made before the surface is drawn.
+        // The marker survives the transcribing state and is cleared on the way
+        // back to idle.
+        match state_name {
+            "recording" | "streaming" => {
+                if read_bool_override("no_osd").unwrap_or(false) {
+                    set_osd_suppressed(true);
+                }
+            }
+            "idle" | "stopped" => set_osd_suppressed(false),
+            _ => {}
         }
     }
 
@@ -3930,21 +3979,34 @@ impl Daemon {
                     // Silently consume any stale cancel request
                     let _ = check_cancel_requested();
 
-                    // Periodically evict idle models (every ~60s when idle)
-                    // The check interval is 500ms, so we use a counter to approximate 60s
-                    static EVICTION_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                    let count = EVICTION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if count.is_multiple_of(120) {  // 500ms * 120 = 60s
-                        if let Some(ref mut mm) = self.model_manager {
-                            mm.evict_idle_models();
-                        }
-                    }
                 }
 
                 // === MEETING MODE HANDLERS ===
 
-                // Poll for meeting commands (file-based IPC)
+                // Poll for meeting commands (file-based IPC), and carry the
+                // idle model eviction that used to live on the 500ms idle arm.
+                //
+                // That arm never ran: select! drops and recreates its
+                // un-completed timer futures each iteration, so this
+                // unconditional 100ms sleep restarted the 500ms sleep before
+                // it could fire. #606 fixed the cancel-trigger half of that
+                // starvation; eviction was the other half, and it meant a
+                // daemon that loaded a model on demand never released it
+                // (#644).
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    // Evict roughly every 60s, and only while idle — unloading
+                    // a model out from under a recording would be worse than
+                    // holding it.
+                    static EVICTION_COUNTER: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
+                    let count =
+                        EVICTION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if count.is_multiple_of(600) && matches!(state, State::Idle) {
+                        if let Some(ref mut mm) = self.model_manager {
+                            mm.evict_idle_models();
+                        }
+                    }
+
                     // Check for meeting start command
                     if let Some(trigger) = check_meeting_start() {
                         if self.config.meeting.enabled && self.meeting_daemon.is_none() {
@@ -4329,6 +4391,31 @@ mod tests {
         // `value_parser` requires touching this test, keeping the daemon
         // and CLI surfaces in sync.
         assert_eq!(ALLOWED_DIARIZATION_OVERRIDES, &["simple", "ml"]);
+    }
+
+    /// #636: the OSD suppression marker is created and removed, never
+    /// rewritten, because both OSD frontends treat "file exists" as the
+    /// signal. Absent is the overwhelmingly common case and must be cheap.
+    #[test]
+    fn test_osd_suppression_marker_lifecycle() {
+        with_test_runtime_dir(|dir| {
+            let marker = dir.join("osd_suppressed");
+            assert!(!marker.exists(), "marker must start absent");
+
+            set_osd_suppressed_at(&marker, true);
+            assert!(marker.exists(), "marker not written");
+
+            // Idempotent: setting it twice is not an error and leaves one file.
+            set_osd_suppressed_at(&marker, true);
+            assert!(marker.exists());
+
+            set_osd_suppressed_at(&marker, false);
+            assert!(!marker.exists(), "marker not cleared");
+
+            // Clearing an already-absent marker must not panic or error.
+            set_osd_suppressed_at(&marker, false);
+            assert!(!marker.exists());
+        });
     }
 
     #[test]
