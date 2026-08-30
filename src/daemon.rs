@@ -857,7 +857,11 @@ impl Daemon {
         };
 
         // Initialize text processor
-        let text_processor = TextProcessor::new(&config.text);
+        // Pass the active engine's language so filler filtering can skip
+        // words that are ordinary vocabulary there rather than disfluencies
+        // (#566).
+        let text_processor =
+            TextProcessor::new_for_language(&config.text, config.active_language());
         if config.text.spoken_punctuation {
             tracing::info!("Spoken punctuation enabled");
         }

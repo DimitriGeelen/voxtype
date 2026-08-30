@@ -343,6 +343,38 @@ impl Config {
         }
     }
 
+    /// The language code configured for the active engine, if it has one.
+    ///
+    /// Engines disagree about where language lives, and several do not take a
+    /// language at all (they detect it, or are single-language). Callers that
+    /// need to adapt behaviour to language — filler-word filtering is the
+    /// first — should ask here rather than reaching into one engine's config
+    /// and being wrong for the other eight.
+    ///
+    /// Returns `None` for automatic detection and for engines without the
+    /// concept, so callers can distinguish "English" from "unknown".
+    pub fn active_language(&self) -> Option<&str> {
+        let code = match self.engine {
+            TranscriptionEngine::Whisper => match &self.whisper.language {
+                super::language::LanguageConfig::Single(code) => code.as_str(),
+                // A constrained detection set is not one language.
+                super::language::LanguageConfig::Multiple(_) => return None,
+            },
+            TranscriptionEngine::Cohere => self.cohere.as_ref().map(|c| c.language.as_str())?,
+            TranscriptionEngine::SenseVoice => {
+                self.sensevoice.as_ref().map(|s| s.language.as_str())?
+            }
+            // Parakeet, Moonshine, Paraformer, Dolphin, Omnilingual and Soniox
+            // either detect the language or are fixed to one.
+            _ => return None,
+        };
+
+        match code {
+            "" | "auto" => None,
+            other => Some(other),
+        }
+    }
+
     /// Get the model name/path for the active engine (for logging)
     pub fn model_name(&self) -> &str {
         match self.engine {
