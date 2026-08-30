@@ -1224,11 +1224,27 @@ mod tests {
         );
     }
 
-    /// The happy path must stay cheap and quiet: any binary that answers
-    /// --version is accepted.
+    /// The happy path must stay cheap and quiet: anything that runs and exits
+    /// zero is accepted.
+    ///
+    /// The probe target is written here rather than borrowed from the system
+    /// (`/bin/true` and friends): the Nix build sandbox has almost no
+    /// filesystem, and a test that assumes one fails there for reasons that
+    /// have nothing to do with the code under test. The script ignores its
+    /// arguments, so it works under any `/bin/sh`, dash included.
     #[test]
     fn verify_binary_runs_accepts_a_working_binary() {
-        assert!(verify_binary_runs(Path::new("/bin/true")).is_ok());
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("voxtype-fake");
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            verify_binary_runs(&path).is_ok(),
+            "a binary that exits zero must be accepted"
+        );
     }
 
     /// Regression test for #443: when `install_active_binary` is called
