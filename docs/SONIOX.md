@@ -13,6 +13,13 @@ Soniox is a paid cloud STT provider offering:
 - **Two API modes** — realtime WebSocket (`stt-rt-v5`) and async REST (`stt-async-v5`)
 - **Domain context** — bias the model toward your vocabulary
 
+> **On version numbers.** Soniox keeps `stt-rt-v4` and `stt-async-v4` as stable
+> aliases pointing at v5, so a config still naming a v4 model is already running
+> v5 and does not need changing. Voxtype defaults to the explicit `v5` names so
+> the model you are running is recorded in your config and in the daemon log,
+> rather than moving under you when Soniox promotes a new generation. Pin a
+> different version by setting `model` yourself.
+
 ## Privacy
 
 Audio is sent to a third-party service over TLS. Soniox processes the audio server-side and discards it according to their [data retention policy](https://soniox.com). **Use a local engine (Whisper, Parakeet) instead if your dictation contains anything you cannot send off-device.**
