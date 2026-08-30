@@ -331,13 +331,18 @@ The audio input device to use. Use `"default"` for the system default microphone
 
 **Finding device names:**
 ```bash
-pactl list sources short
+voxtype info devices     # the names voxtype itself accepts
+arecord -L               # the same names, from ALSA directly
 ```
+
+`audio.device` takes an **ALSA** device name. PulseAudio and PipeWire source
+names, such as those from `pactl list sources short`, are a different namespace
+and will not match — a name like `alsa_input.usb-...` looks plausible but fails.
 
 **Example:**
 ```toml
 [audio]
-device = "alsa_input.usb-Blue_Microphones_Yeti-00.analog-stereo"
+device = "sysdefault:CARD=Yeti"
 ```
 
 ### sample_rate

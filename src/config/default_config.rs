@@ -40,7 +40,9 @@ modifiers = []
 
 [audio]
 # Audio input device ("default" uses system default)
-# List devices with: pactl list sources short
+# List devices with: voxtype info devices
+# (or `arecord -L`). This takes an ALSA device name, not a PulseAudio
+# or PipeWire source name -- names from `pactl list sources` will not work.
 device = "default"
 
 # Sample rate in Hz (whisper expects 16000)
