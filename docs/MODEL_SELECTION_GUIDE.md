@@ -17,6 +17,7 @@ Voxtype has eight transcription engines. Three ship in every binary — Whisper 
 | **Paraformer** | zh, en | Encoder-predictor-decoder | 220 - 487 MB | Fast | No | ONNX |
 | **Dolphin** | 40+ langs, 22 Chinese dialects | CTC E-Branchformer | 198 MB | Fast | No | ONNX |
 | **Omnilingual** | 1600+ | CTC wav2vec2 | 3.9 GB | Moderate | No | ONNX |
+| **Cohere** | 14 | Encoder-decoder | 1.5 - 3.9 GB | Slow (CPU) | Yes | ONNX |
 | **Soniox** (cloud) | 60+ | Cloud (WebSocket / REST) | n/a (no local model) | Cloud-bound | Yes | Built-in |
 
 **Soniox** is different from the others — it's a paid cloud service over WebSocket / REST. No local model, no GPU. Sub-second partial latency. Strong for non-English languages where local Whisper-based engines struggle on lower-end hardware. Ships in every release binary; you only need a `SONIOX_API_KEY`. See [SONIOX.md](SONIOX.md) for the full story.
@@ -408,6 +409,47 @@ model = "omnilingual-large"
 - Character-level output (no word boundaries for many languages)
 - No built-in punctuation
 - Accuracy varies by language; less accurate than specialized models for common languages
+- Requires ONNX binary
+
+---
+
+### 8. Cohere
+
+Cohere's encoder-decoder ASR model. The largest local option here, and the only one whose decoder currently runs on CPU even when the encoder is on a GPU.
+
+**Languages:** 14 — `ar`, `de`, `en`, `es`, `fr`, `hi`, `it`, `ja`, `ko`, `nl`, `pt`, `ru`, `tr`, `zh`.
+
+**Available models:**
+
+| Model | Size | Description |
+|-------|------|-------------|
+| cohere-transcribe-q4f16 | 1.5 GB | q4 weights, fp16 activations. Smallest, GPU-friendly |
+| cohere-transcribe-q4 | 2.0 GB | 4-bit weights. MIGraphX-compatible on AMD |
+| cohere-transcribe-int8 | 2.9 GB | 8-bit weights |
+| cohere-transcribe-fp16 | 3.9 GB | FP16 weights. Highest accuracy, GPU-friendly |
+
+**Config example:**
+
+```toml
+engine = "cohere"
+
+[cohere]
+model = "cohere-transcribe-int8"
+language = "en"
+# threads = 4
+```
+
+Unsupported language codes are rejected at startup with a clear error rather than silently transcribing as English.
+
+**Pros:**
+- Strong accuracy across its 14 languages
+- Punctuation without a post-processing step
+- Four quantizations, so it fits from 1.5 GB up
+
+**Cons:**
+- Largest local models here
+- Slow on CPU; wants a GPU to be comfortable
+- On CUDA the encoder runs on the GPU but the decoder stays on CPU, pending an ONNX Runtime kernel gap
 - Requires ONNX binary
 
 ---
