@@ -1412,7 +1412,9 @@ export SONIOX_API_KEY="your-key-here"
 **Default:** `"stt-rt-v5"`
 **Required:** No
 
-Soniox model identifier. The current realtime model is `stt-rt-v5`. When `async_api = true`, a `model` left at a realtime default (`stt-rt-v4` or `stt-rt-v5`) is swapped to `stt-async-v5`; set `model` to any other value to override.
+Soniox model identifier. The current realtime model is `stt-rt-v5`. Soniox also keeps `stt-rt-v4` as a stable alias pointing at v5, so a config still on the previous default is already running the same model.
+
+When `async_api = true`, a realtime model is mapped to its async counterpart by version: `stt-rt-v5` becomes `stt-async-v5`, `stt-rt-v4` becomes `stt-async-v4`, and so on. The realtime REST endpoint would not serve a realtime model, so this mapping is not optional. Set `model` to an `stt-async-*` name to choose the async model yourself.
 
 ### language_hints
 
@@ -1513,7 +1515,7 @@ Use the Soniox **async transcription API** (file upload + poll) instead of the r
 When `true`:
 - Audio buffered while recording. On release, voxtype uploads the WAV to `https://api.soniox.com/v1/files`, creates a transcription job, polls until complete, fetches the transcript, then types it at the cursor in one shot.
 - `streaming` and `type_partials` are ignored.
-- `model` defaults to `stt-async-v5`. A `model` left at a realtime default (`stt-rt-v4` or `stt-rt-v5`) is also swapped to `stt-async-v5`; any other explicit `model` is used as-is (override only if you know what you're doing).
+- `model` defaults to `stt-async-v5`. Any `stt-rt-v*` model is mapped to the async model of the same version, since the async endpoint cannot serve a realtime one. An explicit `stt-async-*` model is used as-is (override only if you know what you're doing).
 - Push-to-talk is **not** auto-promoted to toggle (no live cursor typing means no compositor-state clobbering).
 
 Latency: typical 15s recording → ~1s upload + 2-5s processing = 3-6s total wait after release. Compare to realtime which streams partials as you speak.
