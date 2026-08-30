@@ -1,4 +1,4 @@
-use super::parse::parse_config_with_defaults;
+use super::parse::parse_config_salvaging;
 use super::{Config, LanguageConfig, OutputMode, SonioxConfig, TranscriptionEngine};
 use crate::error::VoxtypeError;
 use std::path::{Path, PathBuf};
@@ -32,8 +32,30 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
             let contents = std::fs::read_to_string(path)
                 .map_err(|e| VoxtypeError::Config(format!("Failed to read config: {}", e)))?;
 
-            config = parse_config_with_defaults(&contents)
+            // Salvage per section rather than refusing to start: one bad
+            // value used to cost the user every other setting they had
+            // (#646). A TOML syntax error is still fatal, because there is
+            // nothing to salvage from a file we cannot parse at all.
+            let (parsed, rejected) = parse_config_salvaging(&contents)
                 .map_err(|e| VoxtypeError::Config(format!("Invalid config: {}", e)))?;
+            config = parsed;
+
+            for key in &rejected {
+                // Names only. These sections hold API keys for the remote and
+                // Soniox backends, so the values must never reach the log.
+                tracing::warn!(
+                    "Config section '{}' could not be read and is using defaults. \
+                     Check it against `voxtype config schema`.",
+                    key
+                );
+            }
+            if !rejected.is_empty() {
+                tracing::warn!(
+                    "{} config section(s) were skipped: {}",
+                    rejected.len(),
+                    rejected.join(", ")
+                );
+            }
         } else {
             tracing::debug!("Config file not found at {:?}, using defaults", path);
         }
