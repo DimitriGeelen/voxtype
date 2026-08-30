@@ -413,7 +413,7 @@ stops. Values above `150` are clamped by the CLI override.
 voxtype converts the value internally to PulseAudio's cubic percentage scale,
 so what you configure is what you hear.
 
-**Changed in 1.1.0.** Through v1.0.0 the configured percentage was applied
+**Changed in 1.0.1.** Through v1.0.0 the configured percentage was applied
 directly to PulseAudio's cubic scale, which cubed the reduction: `50` left only
 12.5% of the amplitude and `30` was effectively mute. The default moved from
 `70` to `34` at the same time so the audible depth is unchanged (0.70³ ≈ 0.34).
