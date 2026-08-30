@@ -193,6 +193,19 @@ impl ModelManager {
     ///
     /// Call this periodically (e.g., every 60 seconds) to free memory
     /// from models that are no longer being actively used.
+    /// Drop every cached model, returning how many were released.
+    ///
+    /// Used after a transcription task panics: the engine may hold state the
+    /// panic left inconsistent, and reusing it risks compounding the fault.
+    /// Unlike `evict_idle_models` this ignores both the idle timeout and the
+    /// is_primary flag, because the point is to discard a suspect instance
+    /// rather than to reclaim memory (#643).
+    pub fn drop_loaded_models(&mut self) -> usize {
+        let count = self.loaded_models.len();
+        self.loaded_models.clear();
+        count
+    }
+
     pub fn evict_idle_models(&mut self) {
         if self.cold_timeout.is_zero() {
             return; // Auto-eviction disabled
@@ -329,6 +342,17 @@ impl ModelManager {
 
 #[cfg(test)]
 mod tests {
+
+    /// #643: after a panicked transcription the cached engine is suspect, so
+    /// it is dropped wholesale — including the primary, which normal idle
+    /// eviction deliberately keeps.
+    #[test]
+    fn drop_loaded_models_clears_everything_and_reports_the_count() {
+        let config = WhisperConfig::default();
+        let mut mm = ModelManager::new(&config, None);
+        assert_eq!(mm.drop_loaded_models(), 0, "nothing cached yet");
+        assert!(mm.loaded_model_names().is_empty());
+    }
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
