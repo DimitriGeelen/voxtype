@@ -2146,6 +2146,11 @@ Controls desktop notifications at various stages.
 
 When `true`, shows a notification when recording starts (hotkey pressed).
 
+This notification has no timeout: it stays on screen for as long as the
+recording runs, and is replaced or dismissed when the recording ends. A banner
+that expired after a couple of seconds would leave the microphone live with
+nothing on screen to say so.
+
 ### on_recording_stop
 
 **Type:** Boolean
@@ -2153,6 +2158,8 @@ When `true`, shows a notification when recording starts (hotkey pressed).
 **Required:** No
 
 When `true`, shows a notification when recording stops (transcription begins).
+This one replaces the recording notification in place rather than appearing
+beside it.
 
 ### on_transcription
 
