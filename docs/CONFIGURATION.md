@@ -2158,8 +2158,6 @@ nothing on screen to say so.
 **Required:** No
 
 When `true`, shows a notification when recording stops (transcription begins).
-This one replaces the recording notification in place rather than appearing
-beside it.
 
 ### on_transcription
 
