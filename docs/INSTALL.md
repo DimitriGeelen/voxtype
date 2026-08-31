@@ -87,7 +87,7 @@ Pick your distro from the list below. The fastest path on each:
 - **Arch:** `paru -S voxtype-bin`
 - **Debian/Ubuntu:** `sudo apt install ./voxtype_0.7.5-1_amd64.deb`
 - **Fedora:** `sudo dnf install ./voxtype-0.7.5-1.x86_64.rpm`
-- **macOS:** `brew install --cask voxtype`
+- **macOS:** `brew install --cask peteonrails/voxtype/voxtype`
 - **NixOS:** `nix profile install github:peteonrails/voxtype#vulkan`
 - **AppImage:** download, `chmod +x`, run.
 
@@ -174,13 +174,13 @@ Fedora's ydotool ships as a system service that needs extra setup. See [TROUBLES
 
 ### macOS
 
-Apple Silicon only. Uses Microsoft ONNX Runtime so every engine is available, including Parakeet on the Neural Engine path.
+Universal binary: Apple Silicon and Intel. Uses Microsoft ONNX Runtime so every engine is available, including Parakeet on the Neural Engine path.
 
 ```bash
 brew install --cask peteonrails/voxtype/voxtype
 ```
 
-Or download `voxtype-0.7.5-macOS-arm64.dmg` from the [latest release](https://github.com/peteonrails/voxtype/releases/latest). First launch opens a setup wizard that walks you through accessibility permissions, model download, and the FN-key hotkey.
+Or download `voxtype-1.0.0-macos-universal.dmg` from the [latest release](https://github.com/peteonrails/voxtype/releases/latest). First launch opens a setup wizard that walks you through accessibility permissions, model download, and the FN-key hotkey.
 
 ### NixOS
 
