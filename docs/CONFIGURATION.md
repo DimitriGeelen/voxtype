@@ -331,13 +331,18 @@ The audio input device to use. Use `"default"` for the system default microphone
 
 **Finding device names:**
 ```bash
-pactl list sources short
+voxtype info devices     # the names voxtype itself accepts
+arecord -L               # the same names, from ALSA directly
 ```
+
+`audio.device` takes an **ALSA** device name. PulseAudio and PipeWire source
+names, such as those from `pactl list sources short`, are a different namespace
+and will not match — a name like `alsa_input.usb-...` looks plausible but fails.
 
 **Example:**
 ```toml
 [audio]
-device = "alsa_input.usb-Blue_Microphones_Yeti-00.analog-stereo"
+device = "sysdefault:CARD=Yeti"
 ```
 
 ### sample_rate
@@ -1096,6 +1101,28 @@ Maximum time in seconds to wait for the remote server to respond. Increase for s
 backend = "remote"
 remote_endpoint = "http://192.168.1.100:8080"
 remote_timeout_secs = 60  # 60 second timeout for long recordings
+```
+
+### remote_send_auto_language
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+Controls what happens to the `language` field of the request when `language = "auto"`.
+
+By default the field is omitted, which OpenAI-compatible endpoints treat as auto-detect (OpenAI rejects non-ISO-639-1 values such as `"auto"`). whisper.cpp's server instead falls back to its own `-l` setting (default `"en"`) when the field is missing, so auto-detection configured in voxtype is silently ignored. Enable this option to send `language=auto` explicitly.
+
+- For **whisper.cpp server**: Set to `true` (it accepts `"auto"`)
+- For **OpenAI API**: Leave `false` (omitting the field means auto-detect)
+
+**Example:**
+```toml
+[whisper]
+mode = "remote"
+remote_endpoint = "http://192.168.1.100:8080"
+language = "auto"
+remote_send_auto_language = true
 ```
 
 ### whisper_cli_path
@@ -2202,6 +2229,11 @@ urgency = "normal"  # "low" | "normal" | "critical"
 **Required:** No
 
 Delay in milliseconds between each typed character. Increase if characters are being dropped.
+
+On KDE Plasma, the `eitype` driver applies an effective minimum of 1 ms when
+this value is `0`. KWin can otherwise accept a zero-delay event burst while
+silently dropping the tail of a long dictation. Explicit nonzero values are
+preserved, and other output drivers and desktops keep the configured value.
 
 **Example:**
 ```toml
