@@ -147,16 +147,20 @@ impl DotoolOutput {
         Some(path)
     }
 
-    /// Emit a visible configuration error when XKB overrides force the slow direct-dotool path.
+    /// Emit a visible configuration warning when XKB overrides force the slow direct-dotool path.
     fn maybe_warn_slow_path(xkb_layout: Option<&str>, xkb_variant: Option<&str>) {
+        if SLOW_PATH_WARNING_EMITTED.get().is_some() {
+            return;
+        }
+
         if (xkb_layout.is_some() || xkb_variant.is_some()) && Self::daemon_pipe_path().is_some() {
             let _ = SLOW_PATH_WARNING_EMITTED.get_or_init(|| {
                 if xkb_variant.is_some() {
-                    tracing::error!(
+                    tracing::warn!(
                         "dotool configuration warning: XKB variant override detected while dotoold is running; dotoolc cannot receive per-call layout/variant hints, so voxtype will use direct dotool (~750ms vs ~3ms per output). If a fixed layout without variants is enough, configure DOTOOL_XKB_LAYOUT on dotoold and remove voxtype's dotool XKB override; otherwise this slowdown is expected."
                     );
                 } else {
-                    tracing::error!(
+                    tracing::warn!(
                         "dotool configuration warning: XKB layout override detected while dotoold is running; voxtype will use direct dotool (~750ms vs ~3ms per output). For the fast path, move DOTOOL_XKB_LAYOUT to dotoold's service environment and remove voxtype's dotool XKB layout override."
                     );
                 }
