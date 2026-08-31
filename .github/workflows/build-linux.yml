@@ -303,13 +303,17 @@ jobs:
           retention-days: 14
 
       # The OSD launcher + frontends + audio bridge are engine-agnostic and
-      # built once by Dockerfile.onnx alongside the onnx-avx2 binary (same
-      # cargo invocation builds voxtype-osd, voxtype-osd-gtk4,
-      # voxtype-osd-quickshell, and voxtype-audio-bridge). The onnx-avx2
-      # job is the only place these binaries end up in /output, so upload
-      # them as their own artifacts here. Other matrix variants skip.
-      - name: Upload OSD binaries + audio bridge (onnx-avx2 only)
-        if: matrix.variant == 'onnx-avx2'
+      # built alongside the ONNX binary in the same image (one cargo
+      # invocation produces voxtype-osd, voxtype-osd-gtk4,
+      # voxtype-osd-quickshell, and voxtype-audio-bridge). Two matrix jobs
+      # put them in /output: x86_64 onnx-avx2 and aarch64 onnx.
+      #
+      # The aarch64 job built them all along and they were dropped on the
+      # floor, because this upload was keyed to onnx-avx2 alone. Asahi users
+      # were told to build the OSD from source for a binary CI had already
+      # produced (#579).
+      - name: Upload OSD binaries + audio bridge (ONNX jobs only)
+        if: matrix.variant == 'onnx-avx2' || (matrix.arch == 'aarch64' && matrix.variant == 'onnx')
         uses: actions/upload-artifact@v4
         with:
           name: voxtype-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}-osd

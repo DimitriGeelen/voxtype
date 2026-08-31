@@ -53,7 +53,24 @@ use section::Section;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-pub fn run(force_package_mode: bool) -> anyhow::Result<()> {
+/// Entry point for the hidden `voxtype configure --probe-audio-devices`
+/// flag: print detected input devices and exit. See
+/// `audio::start_device_scan` for why this runs in its own process.
+pub fn probe_audio_devices() {
+    audio::print_input_devices();
+}
+
+/// Launch the TUI.
+///
+/// `config_path` is the `-c/--config` value; when set, every section reads and
+/// writes that file instead of the default. Installed before the first section
+/// loads, because a section that has already read the default would save back
+/// to it (#595).
+pub fn run(
+    force_package_mode: bool,
+    config_path: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    config_editor::set_tui_config_path(config_path);
     let mut terminal = enter_terminal()?;
     let result = event_loop(&mut terminal, force_package_mode);
     leave_terminal(&mut terminal)?;
@@ -91,6 +108,7 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<bo
     let general_refresh_interval = Duration::from_secs(2);
 
     loop {
+        app.poll_background();
         terminal.draw(|f| draw(f, &app))?;
 
         if !event::poll(Duration::from_millis(250))? {
@@ -561,6 +579,31 @@ fn render_help_overlay(f: &mut Frame) {
 }
 
 fn render_title(f: &mut Frame, area: Rect) {
+    // The version shown is the *daemon's*, not this TUI's. Someone editing
+    // settings wants to know what will act on them, and after an upgrade
+    // that was installed but never restarted those are different numbers.
+    // Showing the TUI's own build here would quietly answer the wrong
+    // question.
+    let daemon = crate::daemon_status::running_version();
+    let (version_text, version_style) = match &daemon {
+        crate::daemon_status::DaemonVersion::Running(v) if daemon.differs_from_caller() => (
+            format!("daemon {} · this TUI {}", v, env!("CARGO_PKG_VERSION")),
+            Style::default().fg(Color::Yellow),
+        ),
+        crate::daemon_status::DaemonVersion::Running(v) => (
+            format!("daemon {}", v),
+            Style::default().fg(Color::DarkGray),
+        ),
+        crate::daemon_status::DaemonVersion::NotRunning => (
+            "daemon not running".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+        crate::daemon_status::DaemonVersion::Unknown => (
+            "daemon running, version unknown".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    };
+
     let line = Line::from(vec![
         Span::raw(" Voxtype Configuration"),
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
@@ -568,6 +611,8 @@ fn render_title(f: &mut Frame, area: Rect) {
             "edit settings without leaving the terminal",
             Style::default().fg(Color::DarkGray),
         ),
+        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(version_text, version_style),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }

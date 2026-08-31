@@ -302,6 +302,14 @@ impl App {
         }
     }
 
+    /// Give sections with background work a chance to fold results in.
+    /// Called once per event-loop tick (so at least every poll interval).
+    pub fn poll_background(&mut self) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.poll_device_scan();
+        }
+    }
+
     pub fn refresh_inventory(&mut self) {
         self.inventory = build_inventory(self.force_package_mode);
         self.daemon_running = is_daemon_running();
@@ -468,7 +476,6 @@ fn detect_variant_mismatch(inventory: &Inventory) -> Option<VariantMismatch> {
 fn detect_missing_model() -> Option<MissingModel> {
     use crate::config;
     let cfg = config::load_config(None).ok()?;
-    let dir = config::Config::models_dir();
     let (engine_name, model, setup_command) = match cfg.engine {
         config::TranscriptionEngine::Whisper => (
             "whisper",
@@ -534,13 +541,7 @@ fn detect_missing_model() -> Option<MissingModel> {
         return None;
     }
 
-    let installed = if engine_name == "whisper" {
-        dir.join(format!("ggml-{}.bin", model)).exists()
-    } else {
-        let p = dir.join(&model);
-        p.exists()
-    };
-    if installed {
+    if crate::model_catalog::model_installed(engine_name, &model) {
         None
     } else {
         Some(MissingModel {
@@ -550,13 +551,17 @@ fn detect_missing_model() -> Option<MissingModel> {
         })
     }
 }
+
 use crate::daemon_status::is_daemon_running;
 
-/// Modification time of the config file the TUI edits (the same
-/// `Config::default_path()` every section's `ConfigEditor::load()` writes
-/// to). `None` when the path can't be resolved or the file doesn't exist.
+/// Modification time of the config file the TUI edits — the same file every
+/// section's `ConfigEditor::load()` writes to, which is the `-c/--config`
+/// override when one was given. Asking the editor rather than resolving the
+/// default keeps the quit-time restart decision (#614) pointed at the file
+/// actually being edited (#595). `None` when the path can't be resolved or
+/// the file doesn't exist.
 pub fn config_file_mtime() -> Option<std::time::SystemTime> {
-    let path = crate::config::Config::default_path()?;
+    let path = super::config_editor::tui_config_path()?;
     std::fs::metadata(path).ok()?.modified().ok()
 }
 

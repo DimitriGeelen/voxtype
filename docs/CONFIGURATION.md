@@ -331,13 +331,18 @@ The audio input device to use. Use `"default"` for the system default microphone
 
 **Finding device names:**
 ```bash
-pactl list sources short
+voxtype info devices     # the names voxtype itself accepts
+arecord -L               # the same names, from ALSA directly
 ```
+
+`audio.device` takes an **ALSA** device name. PulseAudio and PipeWire source
+names, such as those from `pactl list sources short`, are a different namespace
+and will not match — a name like `alsa_input.usb-...` looks plausible but fails.
 
 **Example:**
 ```toml
 [audio]
-device = "alsa_input.usb-Blue_Microphones_Yeti-00.analog-stereo"
+device = "sysdefault:CARD=Yeti"
 ```
 
 ### sample_rate
@@ -395,20 +400,48 @@ Use this as an alternative to `pause_media` when you want music or video to keep
 ```toml
 [audio]
 duck_media = true
-duck_media_volume_percent = 70
+duck_media_volume_percent = 34
 ```
 
 ### duck_media_volume_percent
 
 **Type:** Integer
-**Default:** `70`
+**Default:** `34`
 **Required:** No
 
-Relative volume percentage for streams affected by `duck_media`. The value is
-applied to each stream's current per-channel volume, not to a fixed 100% base:
-`70` keeps media at 70% of its current volume, `50` keeps it at half, and the
-original per-channel volumes are restored when recording stops. Values above
-`150` are clamped by the CLI override.
+Fraction of its current amplitude that a stream affected by `duck_media`
+keeps, in percent: `50` keeps it at half (-6 dB), `34` at roughly a third
+(-9.3 dB). The value is relative to each stream's current per-channel volume,
+not to a fixed 100% base, and the original volumes are restored when recording
+stops. Values above `150` are clamped by the CLI override.
+
+voxtype converts the value internally to PulseAudio's cubic percentage scale,
+so what you configure is what you hear.
+
+**Changed in 1.0.1.** Through v1.0.0 the configured percentage was applied
+directly to PulseAudio's cubic scale, which cubed the reduction: `50` left only
+12.5% of the amplitude and `30` was effectively mute. The default moved from
+`70` to `34` at the same time so the audible depth is unchanged (0.70³ ≈ 0.34).
+If you set this value yourself against an older build, cube your old number to
+get the equivalent — an old `50` is a new `13`.
+
+### duck_media_fade_ms
+
+**Type:** Integer
+**Default:** `150`
+**Required:** No
+
+Fade duration in milliseconds for the ducking ramp. The same duration is used
+going down at recording start and coming back up when recording ends, so media
+slides out of the way instead of jumping. `0` restores the previous instant
+behaviour. Durations shorter than one 20 ms step are treated as `0`.
+
+```toml
+[audio]
+duck_media = true
+duck_media_volume_percent = 34
+duck_media_fade_ms = 150
+```
 
 ---
 
@@ -1068,6 +1101,28 @@ Maximum time in seconds to wait for the remote server to respond. Increase for s
 backend = "remote"
 remote_endpoint = "http://192.168.1.100:8080"
 remote_timeout_secs = 60  # 60 second timeout for long recordings
+```
+
+### remote_send_auto_language
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+Controls what happens to the `language` field of the request when `language = "auto"`.
+
+By default the field is omitted, which OpenAI-compatible endpoints treat as auto-detect (OpenAI rejects non-ISO-639-1 values such as `"auto"`). whisper.cpp's server instead falls back to its own `-l` setting (default `"en"`) when the field is missing, so auto-detection configured in voxtype is silently ignored. Enable this option to send `language=auto` explicitly.
+
+- For **whisper.cpp server**: Set to `true` (it accepts `"auto"`)
+- For **OpenAI API**: Leave `false` (omitting the field means auto-detect)
+
+**Example:**
+```toml
+[whisper]
+mode = "remote"
+remote_endpoint = "http://192.168.1.100:8080"
+language = "auto"
+remote_send_auto_language = true
 ```
 
 ### whisper_cli_path
@@ -2118,6 +2173,11 @@ Controls desktop notifications at various stages.
 
 When `true`, shows a notification when recording starts (hotkey pressed).
 
+This notification has no timeout: it stays on screen for as long as the
+recording runs, and is replaced or dismissed when the recording ends. A banner
+that expired after a couple of seconds would leave the microphone live with
+nothing on screen to say so.
+
 ### on_recording_stop
 
 **Type:** Boolean
@@ -2169,6 +2229,11 @@ urgency = "normal"  # "low" | "normal" | "critical"
 **Required:** No
 
 Delay in milliseconds between each typed character. Increase if characters are being dropped.
+
+On KDE Plasma, the `eitype` driver applies an effective minimum of 1 ms when
+this value is `0`. KWin can otherwise accept a zero-delay event burst while
+silently dropping the tail of a long dictation. Explicit nonzero values are
+preserved, and other output drivers and desktops keep the configured value.
 
 **Example:**
 ```toml

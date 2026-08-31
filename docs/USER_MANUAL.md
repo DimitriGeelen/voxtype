@@ -457,7 +457,8 @@ fallback_to_clipboard = true
 type_delay_ms = 0
 
 [output.notification]
-# Show notification when recording starts (hotkey pressed)
+# Show notification when recording starts (hotkey pressed).
+# Stays on screen until the recording ends.
 on_recording_start = false
 
 # Show notification when recording stops (transcription begins)
@@ -529,7 +530,17 @@ voxtype record start --auto-submit
 
 # Disable auto-submit just this recording (even if config has auto_submit = true)
 voxtype record toggle --no-auto-submit
+
+# Suppress the on-screen display for just this recording
+voxtype record start --no-osd
 ```
+
+`--no-osd` hides the OSD for that recording only and leaves `osd.enabled` in
+`config.toml` untouched. It exists for programs that drive dictation and draw
+their own UI: without it, the only way to suppress the overlay is to rewrite the
+user's config and restart the daemon. Both OSD frontends honor it, and the
+daemon still reports the real state, so Waybar and `voxtype status` are
+unaffected.
 
 ---
 
