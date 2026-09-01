@@ -93,6 +93,43 @@ decides for itself when to send it.
 A `[profiles.agent]` block with a `post_process_command` is a good place to
 normalise dictation before an agent sees it, stripping filler words for instance.
 
+## A review gate before text lands
+
+`post_process` is a gate, not just a filter: whatever the hook prints on
+stdout is what lands, and a hook that is killed at `timeout_ms` — or exits
+non-zero — falls back to the raw transcript. That makes a human review step
+possible without touching Voxtype itself.
+
+The contract a review hook must honour:
+
+- read the transcript on stdin
+- print the final text on stdout, nothing else
+- exit `0`; any other exit, or the `timeout_ms` kill, means "use the raw
+  transcript" — a hook must never block past the timeout or the dictation
+  is silently lost
+- the text lands wherever the user was; the hook never needs to know
+
+A 30-second human will routinely exceed the default timeout, so raise it:
+
+```toml
+[output.post_process]
+command = "/usr/local/bin/my-review-gui"
+timeout_ms = 600000     # a human reading their own words, not a model answering
+trim = false            # the hook owns whitespace
+```
+
+Terminal targets paste with `Ctrl+Shift+V`, not `Ctrl+V`; point
+`output.paste_keys` at the chord your targets actually bind, or the paste
+silently does nothing in some of them.
+
+One maintained implementation of this pattern is
+[`voxtype-review`](https://github.com/DimitriGeelen/voxtype-review): a small
+Rust/egui popup that shows the transcript for editing, runs configurable
+actions (tidy, translate, bullets — local LLM or HTTP), keeps a per-round
+instruction box that accepts spoken input, and steps back through every
+round with `Alt+arrow`. `Esc` always emits the raw transcript; `Enter`
+commits what the box holds.
+
 ## What Voxtype will not do for you
 
 Voxtype does not edit your configuration, and asks that you not edit its own:
