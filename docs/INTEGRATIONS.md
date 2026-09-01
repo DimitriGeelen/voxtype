@@ -107,7 +107,10 @@ One maintained implementation is
 [`voxtype-review`](https://github.com/DimitriGeelen/voxtype-review): the
 transcript in an editable box, an extensible action list on number
 shortcuts, results shown before they are committed, `Alt+arrow` through
-every round, and `Esc` always returns your original words.
+every round, `Esc` aborts: the hook prints nothing and exits 0, and with
+`fallback_on_empty = false` nothing lands at all — no paste, not even the
+original. (Keep that flag in mind when you build your own menu: it is the
+difference between "cancel to the original" and "cancel to nothing".)
 
 The pattern needs nothing from Voxtype but the hook it already has:
 `post_process` is a gate, not just a filter — whatever the hook prints on
